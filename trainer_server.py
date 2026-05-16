@@ -259,9 +259,25 @@ def _reset_audio_dir(directory: Path):
                 pass
 
 
+_AUDIO_LIST_CACHE: Dict[str, tuple[float, List[str]]] = {}
+_AUDIO_LIST_CACHE_LOCK = threading.Lock()
+
+
 def _list_audio_samples(directory: Path) -> List[str]:
     directory.mkdir(parents=True, exist_ok=True)
-    return sorted(p.name for p in directory.glob("*.wav"))
+    key = str(directory)
+    try:
+        mtime = directory.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    with _AUDIO_LIST_CACHE_LOCK:
+        cached = _AUDIO_LIST_CACHE.get(key)
+        if cached is not None and cached[0] == mtime:
+            return list(cached[1])
+    names = sorted(p.name for p in directory.glob("*.wav"))
+    with _AUDIO_LIST_CACHE_LOCK:
+        _AUDIO_LIST_CACHE[key] = (mtime, names)
+    return list(names)
 
 
 def _list_personal_samples() -> List[str]:
