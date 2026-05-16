@@ -30,8 +30,9 @@ config = {
 
 # Add personal features if they exist
 if os.path.exists("generated/personal_augmented_features/training"):
-    config["features"].insert(1, {"features_dir": "generated/personal_augmented_features", "sampling_weight": 3.0, "penalty_weight": 1.0, "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"})
-    print("✅ Added personal features with higher weight (3.0)")
+    personal_weight = float(os.environ.get("MWW_PERSONAL_SAMPLING_WEIGHT", "6.0"))
+    config["features"].insert(1, {"features_dir": "generated/personal_augmented_features", "sampling_weight": personal_weight, "penalty_weight": 1.0, "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"})
+    print(f"✅ Added personal features with sampling_weight={personal_weight}")
 
 # Add reviewed false-positive features if they exist
 if os.path.exists("generated/reviewed_negative_features/training"):
