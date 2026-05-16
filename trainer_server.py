@@ -63,6 +63,7 @@ TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
 TARGET_SAMPLE_WIDTH_BYTES = 2
 CAPTURE_GAIN_PROFILE = "capture_rms_v1"
+MAX_UPLOAD_BYTES = int(os.environ.get("MWW_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
 FIRMWARE_CACHE_DIR = ROOT_DIR / ".cache" / "firmware_flasher"
 FIRMWARE_HELPER = ROOT_DIR / "scripts_macos" / "flash_esphome_ota.py"
 FIRMWARE_DEFAULT_OTA_PORT = int(os.environ.get("ESPHOME_OTA_PORT", "3232"))
@@ -914,6 +915,35 @@ def _save_audio_sample(
             postprocess_info=postprocess_info,
         ),
     }
+
+
+class UploadTooLargeError(ValueError):
+    pass
+
+
+async def _read_upload_capped(file: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise UploadTooLargeError(f"Upload exceeds {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _read_body_capped(request: Request, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise UploadTooLargeError(f"Upload exceeds {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _save_personal_sample(data: bytes, original_name: str, out_name: str | None = None) -> Dict[str, Any]:
@@ -2295,7 +2325,10 @@ async def upload_take(
 
     out_name = f"speaker{speaker_index:02d}_take{take_index:02d}.wav"
 
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     try:
         result = _save_personal_sample(data, file.filename or out_name, out_name=out_name)
     except Exception as e:
@@ -2313,7 +2346,10 @@ async def upload_personal_sample(file: UploadFile = File(...)):
     if not safe_word:
         return JSONResponse({"ok": False, "error": "No active session. Call /api/start_session first."}, status_code=400)
 
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     try:
         result = _save_personal_sample(data, file.filename or "sample")
     except Exception as e:
@@ -2336,7 +2372,10 @@ async def upload_captured_audio(
     notes: str | None = Form(None),
     metadata_json: str | None = Form(None),
 ):
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     try:
         result = _save_captured_sample(data, file.filename or "captured")
     except Exception as e:
@@ -2401,7 +2440,10 @@ async def upload_captured_audio_raw(
     x_average_probability: str | None = Header(default=None),
     x_notes: str | None = Header(default=None),
 ):
-    raw_data = await request.body()
+    try:
+        raw_data = await _read_body_capped(request)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     audio_format = (x_audio_format or "wav").strip().lower()
 
     try:
@@ -2835,7 +2877,10 @@ async def firmware_flash(
     if not filename.lower().endswith(".bin"):
         return JSONResponse({"ok": False, "error": "Firmware upload must be a compiled .bin file."}, status_code=400)
 
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     if not data:
         return JSONResponse({"ok": False, "error": "Firmware file is empty."}, status_code=400)
     if not FIRMWARE_HELPER.exists():
