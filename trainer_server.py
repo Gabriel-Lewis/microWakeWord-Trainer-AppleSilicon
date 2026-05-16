@@ -2318,7 +2318,7 @@ def get_session():
             "takes_per_speaker": STATE["takes_per_speaker"],
             "takes_received": len(takes),
             "takes": list(takes),
-            "training": dict(STATE["training"]),
+            "training": {**STATE["training"], "log_lines": list(STATE["training"].get("log_lines") or [])},
             "available_languages": available_languages,
         }
 
@@ -2994,7 +2994,9 @@ def train_now(payload: Dict[str, Any] = None):
 @app.get("/api/train_status")
 def train_status():
     with STATE_LOCK:
-        return {"ok": True, "training": dict(STATE["training"])}
+        snapshot = dict(STATE["training"])
+        snapshot["log_lines"] = list(snapshot.get("log_lines") or [])
+    return {"ok": True, "training": snapshot}
 
 
 @app.post("/api/reset_recordings")
