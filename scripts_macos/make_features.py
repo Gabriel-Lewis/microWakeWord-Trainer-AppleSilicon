@@ -89,8 +89,8 @@ augmenter = Augmentation(
     },
     impulse_paths=impulse_paths,
     background_paths=background_paths,
-    background_min_snr_db=5,
-    background_max_snr_db=10,
+    background_min_snr_db=3,
+    background_max_snr_db=20,
     min_jitter_s=0.2,
     max_jitter_s=0.3,
 )
