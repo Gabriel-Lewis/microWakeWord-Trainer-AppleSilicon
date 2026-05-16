@@ -1417,6 +1417,20 @@ def _firmware_cache_slug(*parts: Any) -> str:
     return (slug[:96] or "default").lower()
 
 
+FIRMWARE_VALUE_MAX_LEN = 512
+
+
+def _sanitize_firmware_value(raw: Any) -> str:
+    text = "" if raw is None else str(raw)
+    text = text.replace("\r", "").replace("\n", " ")
+    text = "".join(ch for ch in text if ch == "\t" or ord(ch) >= 0x20)
+    if len(text) > FIRMWARE_VALUE_MAX_LEN:
+        raise ValueError(
+            f"Firmware profile value exceeds {FIRMWARE_VALUE_MAX_LEN} characters"
+        )
+    return text
+
+
 def _firmware_build_cache_path(
     template_key: str,
     normalized: Dict[str, str],
@@ -1468,6 +1482,7 @@ def _firmware_profile_values_for_template(profile: Dict[str, Any], substitutions
 
 
 def _normalize_firmware_profile_update(template_key: str, values: Dict[str, Any], profile_key: str = "") -> Dict[str, str]:
+    values = {str(k): _sanitize_firmware_value(v) for k, v in (values or {}).items()}
     ctx = _load_firmware_template_context(template_key, profile_key)
     spec = ctx["spec"]
     profile = ctx.get("profile") if isinstance(ctx.get("profile"), dict) else {}
@@ -1730,6 +1745,8 @@ def _render_firmware_config(
     session_id: str,
     port: Any = None,
 ) -> tuple[Path, Dict[str, str], Path]:
+    values = {str(k): _sanitize_firmware_value(v) for k, v in (values or {}).items()}
+    host = _sanitize_firmware_value(host)
     profile_key = _firmware_profile_key(template_key, host, port)
     ctx = _load_firmware_template_context(template_key, profile_key)
     spec = ctx["spec"]
