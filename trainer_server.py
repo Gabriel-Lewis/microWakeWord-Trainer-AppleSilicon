@@ -1151,7 +1151,7 @@ def _run_training_background(safe_word: str, language: str):
         with open(log_path, "w", encoding="utf-8") as lf:
             env = os.environ.copy()
             env["MWW_LANGUAGE"] = language
-            proc = subprocess.Popen(
+            with subprocess.Popen(
                 cmd,
                 cwd=str(ROOT_DIR),
                 stdout=subprocess.PIPE,
@@ -1159,14 +1159,14 @@ def _run_training_background(safe_word: str, language: str):
                 text=True,
                 bufsize=1,
                 env=env,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                lf.write(line)
-                lf.flush()
-                _append_train_log(line)
+            ) as proc:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    lf.write(line)
+                    lf.flush()
+                    _append_train_log(line)
 
-            rc = proc.wait()
+                rc = proc.wait()
 
         _append_train_log(f"✓ Training finished (exit_code={rc})")
         with STATE_LOCK:
@@ -1968,7 +1968,7 @@ def _run_firmware_flash_background(session_id: str):
 
     try:
         env = _firmware_runner_env()
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             command,
             cwd=str(ROOT_DIR),
             stdout=subprocess.PIPE,
@@ -1976,18 +1976,18 @@ def _run_firmware_flash_background(session_id: str):
             text=True,
             bufsize=1,
             env=env,
-        )
-        with FIRMWARE_LOCK:
-            live = FIRMWARE_SESSIONS.get(session_id)
-            if isinstance(live, dict):
-                live["pid"] = int(proc.pid or 0)
-                live["message"] = "Firmware upload running."
+        ) as proc:
+            with FIRMWARE_LOCK:
+                live = FIRMWARE_SESSIONS.get(session_id)
+                if isinstance(live, dict):
+                    live["pid"] = int(proc.pid or 0)
+                    live["message"] = "Firmware upload running."
 
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            for part in line.replace("\r", "\n").splitlines():
-                _append_firmware_log(session_id, part)
-        rc = proc.wait()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                for part in line.replace("\r", "\n").splitlines():
+                    _append_firmware_log(session_id, part)
+            rc = proc.wait()
 
         if rc == 0:
             _append_firmware_log(session_id, f"✓ Firmware flash finished (exit_code={rc})")
@@ -2056,7 +2056,7 @@ def _run_firmware_build_flash_background(session_id: str):
 
     try:
         env = _firmware_runner_env(include_esphome_pythonpath=True)
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             command,
             cwd=str(ROOT_DIR),
             stdout=subprocess.PIPE,
@@ -2064,19 +2064,19 @@ def _run_firmware_build_flash_background(session_id: str):
             text=True,
             bufsize=1,
             env=env,
-        )
-        with FIRMWARE_LOCK:
-            live = FIRMWARE_SESSIONS.get(session_id)
-            if isinstance(live, dict):
-                live["pid"] = int(proc.pid or 0)
-                live["message"] = "Firmware build + flash running."
-                live["config_path"] = str(config_path)
+        ) as proc:
+            with FIRMWARE_LOCK:
+                live = FIRMWARE_SESSIONS.get(session_id)
+                if isinstance(live, dict):
+                    live["pid"] = int(proc.pid or 0)
+                    live["message"] = "Firmware build + flash running."
+                    live["config_path"] = str(config_path)
 
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            for part in line.replace("\r", "\n").splitlines():
-                _append_firmware_log(session_id, part)
-        rc = proc.wait()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                for part in line.replace("\r", "\n").splitlines():
+                    _append_firmware_log(session_id, part)
+            rc = proc.wait()
 
         if rc == 0:
             _append_firmware_log(session_id, f"✓ Firmware build + flash finished (exit_code={rc})")
@@ -2197,14 +2197,17 @@ def _discover_with_dns_sd(timeout_seconds: float) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-    try:
-        time.sleep(max(0.5, timeout_seconds))
-        proc.terminate()
-        output, _ = proc.communicate(timeout=1.5)
-    except Exception:
-        with contextlib.suppress(Exception):
-            proc.kill()
-        output = ""
+    with proc:
+        try:
+            time.sleep(max(0.5, timeout_seconds))
+            proc.terminate()
+            output, _ = proc.communicate(timeout=1.5)
+        except Exception:
+            with contextlib.suppress(Exception):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                proc.communicate(timeout=1.0)
+            output = ""
 
     devices: List[Dict[str, Any]] = []
     for line in (output or "").splitlines():
