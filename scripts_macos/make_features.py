@@ -52,7 +52,7 @@ if os.path.exists("./personal_samples") and any(Path("./personal_samples").glob(
         input_directory="./personal_samples",
         file_pattern="*.wav",
         max_clip_duration_s=5,
-        remove_silence=True,
+        remove_silence=False,
         random_split_seed=10,
         split_count=0.1,
     )
