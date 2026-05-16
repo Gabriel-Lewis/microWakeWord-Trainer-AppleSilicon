@@ -614,9 +614,9 @@ def _find_ffmpeg() -> str | None:
     return None
 
 
-def _inspect_wav_bytes(data: bytes) -> Dict[str, Any] | None:
+def _inspect_wav(source) -> Dict[str, Any] | None:
     try:
-        with wave.open(io.BytesIO(data), "rb") as wf:
+        with wave.open(source, "rb") as wf:
             frames = wf.getnframes()
             rate = wf.getframerate()
             duration = (frames / rate) if rate else 0.0
@@ -630,6 +630,18 @@ def _inspect_wav_bytes(data: bytes) -> Dict[str, Any] | None:
                 "duration_s": round(duration, 3),
             }
     except Exception:
+        return None
+
+
+def _inspect_wav_bytes(data: bytes) -> Dict[str, Any] | None:
+    return _inspect_wav(io.BytesIO(data))
+
+
+def _inspect_wav_path(path: Path) -> Dict[str, Any] | None:
+    try:
+        with open(path, "rb") as fh:
+            return _inspect_wav(fh)
+    except OSError:
         return None
 
 
@@ -1017,7 +1029,7 @@ def _captured_item_from_path(audio_path: Path) -> Dict[str, Any]:
     meta = _ensure_captured_playback_ready(audio_path, _load_sidecar_json(audio_path))
     stat = audio_path.stat()
     event_type = str(meta.get("event_type") or "captured").strip() or "captured"
-    final_format = meta.get("final_format") or _inspect_wav_bytes(audio_path.read_bytes()) or {}
+    final_format = meta.get("final_format") or _inspect_wav_path(audio_path) or {}
     return {
         "saved_as": audio_path.name,
         "original_name": meta.get("original_name") or audio_path.name,
@@ -1056,7 +1068,7 @@ def _list_captured_items() -> List[Dict[str, Any]]:
 def _sample_item_from_path(audio_path: Path, bucket: str) -> Dict[str, Any]:
     meta = _load_sidecar_json(audio_path)
     stat = audio_path.stat()
-    final_format = meta.get("final_format") or meta.get("detected_format") or _inspect_wav_bytes(audio_path.read_bytes()) or {}
+    final_format = meta.get("final_format") or meta.get("detected_format") or _inspect_wav_path(audio_path) or {}
     return {
         "bucket": bucket,
         "saved_as": audio_path.name,
