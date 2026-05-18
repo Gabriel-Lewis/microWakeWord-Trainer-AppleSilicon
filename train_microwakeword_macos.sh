@@ -632,6 +632,7 @@ echo "📊 Recording training run to history…"
 "$PY" scripts_macos/record_training_run.py \
   --wake-word "$TARGET_WORD" \
   --calibration-json "$CALIBRATION_JSON" \
+  --training-yaml "training_parameters.yaml" \
   --max-tts-samples "$MAX_TTS_SAMPLES" \
   --batch-size "$BATCH_SIZE" \
   --piper-models "$PIPER_MODELS_CSV" \

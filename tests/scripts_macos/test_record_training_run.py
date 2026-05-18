@@ -82,6 +82,67 @@ def test_main_writes_jsonl_with_calibration(tmp_path, monkeypatch):
     assert len(record["per_window_best"]) == 1
 
 
+def test_training_config_captured(tmp_path, monkeypatch):
+    yaml_content = """
+training_steps: [20000, 10000, 10000]
+learning_rates: [0.001, 0.0005, 0.0001]
+time_mask_count: [2]
+time_mask_max_size: [5]
+freq_mask_count: [2]
+freq_mask_max_size: [5]
+positive_class_weight: [1]
+negative_class_weight: [20]
+features:
+  - features_dir: generated/generated_augmented_features
+    sampling_weight: 2.0
+    truth: true
+  - features_dir: generated/personal_augmented_features
+    sampling_weight: 6.0
+    truth: true
+"""
+    yaml_path = tmp_path / "training_parameters.yaml"
+    yaml_path.write_text(yaml_content)
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "record_training_run.py",
+            "--wake-word", "karlyle",
+            "--training-yaml", str(yaml_path),
+            "--personal-samples-dir", str(tmp_path),
+            "--negative-samples-dir", str(tmp_path),
+            "--output-dir", str(tmp_path / "out"),
+        ],
+    )
+    rtr.main()
+    record = json.loads((tmp_path / "out" / "karlyle_history.jsonl").read_text().strip())
+    cfg = record["training_config"]
+    assert cfg["training_steps"] == [20000, 10000, 10000]
+    assert cfg["learning_rates"] == [0.001, 0.0005, 0.0001]
+    assert cfg["time_mask_count"] == [2]
+    assert cfg["positive_class_weight"] == [1]
+    assert cfg["negative_class_weight"] == [20]
+    assert len(cfg["feature_sources"]) == 2
+    assert cfg["feature_sources"][0]["sampling_weight"] == 2.0
+    assert cfg["feature_sources"][1]["truth"] is True
+
+
+def test_training_config_null_when_yaml_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "record_training_run.py",
+            "--wake-word", "karlyle",
+            "--training-yaml", str(tmp_path / "missing.yaml"),
+            "--personal-samples-dir", str(tmp_path),
+            "--negative-samples-dir", str(tmp_path),
+            "--output-dir", str(tmp_path / "out"),
+        ],
+    )
+    rtr.main()
+    record = json.loads((tmp_path / "out" / "karlyle_history.jsonl").read_text().strip())
+    assert record["training_config"] is None
+
+
 def test_main_writes_nulls_without_calibration(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sys, "argv",
