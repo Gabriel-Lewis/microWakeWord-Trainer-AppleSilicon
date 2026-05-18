@@ -1650,6 +1650,7 @@
     captured: { items: [], captured_count: 0, negative_count: 0, personal_count: 0 },
     samples: { personal: [], negative: [], personal_count: 0, negative_count: 0, activeBucket: "personal", pages: { personal: 0, negative: 0 } },
     firmware: { devices: [], templates: [], flashing: null, logLines: [], activeTemplateKey: "" },
+    history: { words: [], runs: [], selectedWord: "" },
     uploadBusy: false,
     reviewBusy: false,
     firmwareBusy: false,
@@ -1931,15 +1932,17 @@
   }
 
   function setActiveView(view) {
-    uiState.activeView = ["captured", "samples", "firmware"].includes(view) ? view : "trainer";
+    uiState.activeView = ["captured", "samples", "firmware", "history"].includes(view) ? view : "trainer";
     $("trainerView").hidden = uiState.activeView !== "trainer";
     $("capturedView").hidden = uiState.activeView !== "captured";
     $("samplesView").hidden = uiState.activeView !== "samples";
     $("firmwareView").hidden = uiState.activeView !== "firmware";
+    $("historyView").hidden = uiState.activeView !== "history";
     $("tabTrainer").classList.toggle("active", uiState.activeView === "trainer");
     $("tabCaptured").classList.toggle("active", uiState.activeView === "captured");
     $("tabSamples").classList.toggle("active", uiState.activeView === "samples");
     $("tabFirmware").classList.toggle("active", uiState.activeView === "firmware");
+    $("tabHistory").classList.toggle("active", uiState.activeView === "history");
   }
 
   async function api(path, opts) {
@@ -3220,6 +3223,153 @@
     }
   }
 
+  // ── History tab ──────────────────────────────────────────────────────────
+
+  function _historySparkline(svgId, values, color, formatTip) {
+    const svg = $(svgId);
+    if (!svg) return;
+    svg.innerHTML = "";
+    const W = 300, H = 80, PAD = 6;
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = max - min || 1;
+    const pts = values.map((v, i) => {
+      const x = PAD + (i / Math.max(values.length - 1, 1)) * (W - PAD * 2);
+      const y = H - PAD - ((v - min) / range) * (H - PAD * 2);
+      return [x, y];
+    });
+    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    polyline.setAttribute("points", pts.map(([x, y]) => `${x},${y}`).join(" "));
+    polyline.setAttribute("stroke", color);
+    polyline.setAttribute("stroke-width", "2.5");
+    polyline.setAttribute("fill", "none");
+    polyline.setAttribute("stroke-linejoin", "round");
+    polyline.setAttribute("stroke-linecap", "round");
+    svg.appendChild(polyline);
+    // Dots
+    pts.forEach(([x, y], i) => {
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", x); circle.setAttribute("cy", y); circle.setAttribute("r", "3.5");
+      circle.setAttribute("fill", color);
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = formatTip(values[i]);
+      circle.appendChild(title);
+      svg.appendChild(circle);
+    });
+  }
+
+  function _renderHistoryCharts(runs) {
+    const valid = runs.filter(r => r.recall !== null && r.false_accepts_per_hour !== null).slice().reverse();
+    if (valid.length < 2) {
+      $("historyChartsArea").hidden = true;
+      return;
+    }
+    $("historyChartsArea").hidden = false;
+    _historySparkline("historyRecallChart", valid.map(r => r.recall * 100), "var(--ok)", v => `${v.toFixed(2)}%`);
+    _historySparkline("historyFaphChart", valid.map(r => r.false_accepts_per_hour), "var(--orange2)", v => `${v.toFixed(3)} /hr`);
+  }
+
+  function _renderHistoryTable(runs) {
+    const wrap = $("historyTableWrap");
+    if (!runs.length) {
+      wrap.innerHTML = '<div class="emptyState">No runs recorded yet for this wake word.</div>';
+      return;
+    }
+    const fmtDate = iso => {
+      try { return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); }
+      catch { return iso; }
+    };
+    const fmtRecall = v => v === null || v === undefined ? "—" : `<span class="recallBadge">${(v * 100).toFixed(2)}%</span>`;
+    const fmtFaph = v => v === null || v === undefined ? "—" : `<span class="${v < 1 ? "faphBadge" : "warnBadge"}">${v.toFixed(3)}</span>`;
+    const fmtNum = v => (v === null || v === undefined || v === 0) ? "—" : v.toLocaleString();
+    const fmtModels = arr => (arr && arr.length) ? arr.map(m => m.split("/").pop().replace(/\.(onnx|pt)$/, "")).join(", ") : "—";
+
+    let html = `<table>
+<thead><tr>
+  <th>Date</th><th>Recall</th><th>FAPH</th><th>Cutoff</th><th>Window</th>
+  <th>TTS Samples</th><th>Personal</th><th>Negatives</th><th>Piper Model(s)</th>
+</tr></thead><tbody>`;
+
+    runs.forEach((r, idx) => {
+      html += `<tr class="historyRunRow" data-idx="${idx}">
+  <td>${fmtDate(r.timestamp)}</td>
+  <td>${fmtRecall(r.recall)}</td>
+  <td>${fmtFaph(r.false_accepts_per_hour)}</td>
+  <td>${r.probability_cutoff !== null && r.probability_cutoff !== undefined ? r.probability_cutoff.toFixed(2) : "—"}</td>
+  <td>${r.sliding_window_size !== null && r.sliding_window_size !== undefined ? r.sliding_window_size : "—"}</td>
+  <td>${fmtNum(r.max_tts_samples)}</td>
+  <td>${fmtNum(r.personal_sample_count)}</td>
+  <td>${fmtNum(r.negative_sample_count)}</td>
+  <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.piper_models||[]).join(', ')}">${fmtModels(r.piper_models)}</td>
+</tr>`;
+      if (r.per_window_best && r.per_window_best.length) {
+        html += `<tr class="historyWindowRow" id="historyWindowRow${idx}" hidden>
+  <td colspan="9">
+    <table style="width:auto;font-size:12px">
+      <thead><tr><th style="padding:2px 8px">Window</th><th style="padding:2px 8px">Cutoff</th><th style="padding:2px 8px">Recall</th><th style="padding:2px 8px">FAPH</th></tr></thead>
+      <tbody>
+        ${r.per_window_best.map(w => `<tr>
+          <td style="padding:2px 8px">${w.sliding_window_size}</td>
+          <td style="padding:2px 8px">${(w.probability_cutoff||0).toFixed(2)}</td>
+          <td style="padding:2px 8px">${w.recall !== undefined ? (w.recall*100).toFixed(2)+"%" : "—"}</td>
+          <td style="padding:2px 8px">${w.false_accepts_per_hour !== undefined ? w.false_accepts_per_hour.toFixed(3) : "—"}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+  </td>
+</tr>`;
+      }
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+
+    wrap.querySelectorAll("tr.historyRunRow").forEach(row => {
+      row.addEventListener("click", () => {
+        const idx = row.dataset.idx;
+        const detail = $(`historyWindowRow${idx}`);
+        if (detail) detail.hidden = !detail.hidden;
+      });
+    });
+  }
+
+  async function refreshHistory() {
+    try {
+      const data = await api("/api/training_history");
+      uiState.history.words = data.words || [];
+      const sel = $("historyWordSelect");
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">— select —</option>' +
+        uiState.history.words.map(w => `<option value="${w}"${w === prev ? " selected" : ""}>${w}</option>`).join("");
+      if (uiState.history.words.includes(prev)) {
+        await loadHistoryForWord(prev);
+      }
+    } catch (err) {
+      setPill($("historyStatus"), "Load failed", "err");
+    }
+  }
+
+  async function loadHistoryForWord(word) {
+    if (!word) {
+      uiState.history.selectedWord = "";
+      uiState.history.runs = [];
+      $("historyTableWrap").innerHTML = '<div class="emptyState">Select a wake word above to view its training history.</div>';
+      $("historyChartsArea").hidden = true;
+      setPill($("historyStatus"), "No word selected", "muted");
+      return;
+    }
+    try {
+      setPill($("historyStatus"), "Loading…", "warn");
+      const data = await api(`/api/training_history/${encodeURIComponent(word)}`);
+      uiState.history.selectedWord = word;
+      uiState.history.runs = data.runs || [];
+      const count = uiState.history.runs.length;
+      setPill($("historyStatus"), `${count} run${count !== 1 ? "s" : ""}`, count ? "ok" : "");
+      _renderHistoryCharts(uiState.history.runs);
+      _renderHistoryTable(uiState.history.runs);
+    } catch (err) {
+      setPill($("historyStatus"), "Load failed", "err");
+    }
+  }
+
   $("phrase").addEventListener("input", syncButtons);
   $("tabTrainer").addEventListener("click", () => setActiveView("trainer"));
   $("tabCaptured").addEventListener("click", () => setActiveView("captured"));
@@ -3229,6 +3379,13 @@
       setPill($("status"), "Sample refresh failed", "err");
       alert("Sample refresh failed: " + error.message);
     });
+  });
+  $("tabHistory").addEventListener("click", () => {
+    setActiveView("history");
+    refreshHistory().catch(() => setPill($("historyStatus"), "Load failed", "err"));
+  });
+  $("historyWordSelect").addEventListener("change", (e) => {
+    loadHistoryForWord(e.target.value).catch(() => setPill($("historyStatus"), "Load failed", "err"));
   });
   $("tabFirmware").addEventListener("click", () => {
     setActiveView("firmware");
