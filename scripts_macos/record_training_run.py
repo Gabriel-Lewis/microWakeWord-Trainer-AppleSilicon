@@ -38,7 +38,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     now = datetime.now(timezone.utc)
-    run_id = now.isoformat()
 
     recall = None
     faph = None
@@ -64,7 +63,6 @@ def main() -> int:
     piper_models = [m.strip() for m in args.piper_models.split(",") if m.strip()]
 
     record = {
-        "run_id": run_id,
         "timestamp": now.isoformat(),
         "wake_word": args.wake_word,
         "recall": recall,

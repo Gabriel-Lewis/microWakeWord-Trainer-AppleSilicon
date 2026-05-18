@@ -3299,7 +3299,7 @@
   <td>${fmtNum(r.max_tts_samples)}</td>
   <td>${fmtNum(r.personal_sample_count)}</td>
   <td>${fmtNum(r.negative_sample_count)}</td>
-  <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.piper_models||[]).join(', ')}">${fmtModels(r.piper_models)}</td>
+  <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeAttr((r.piper_models||[]).join(', '))}">${fmtModels(r.piper_models)}</td>
 </tr>`;
       if (r.per_window_best && r.per_window_best.length) {
         html += `<tr class="historyWindowRow" id="historyWindowRow${idx}" hidden>

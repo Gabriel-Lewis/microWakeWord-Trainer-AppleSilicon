@@ -3053,6 +3053,8 @@ def training_history_words():
 @app.get("/api/training_history/{word}")
 def training_history_for_word(word: str):
     safe = re.sub(r"[^a-z0-9_]+", "", re.sub(r"\s+", "_", word.lower()))
+    if len(safe) > 100:
+        return {"runs": []}
     if not safe:
         return {"runs": []}
     history_path = TRAINED_WAKE_WORDS_DIR / f"{safe}_history.jsonl"
