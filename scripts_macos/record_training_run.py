@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     now = datetime.now(timezone.utc)
-    run_id = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_id = now.isoformat()
 
     recall = None
     faph = None
