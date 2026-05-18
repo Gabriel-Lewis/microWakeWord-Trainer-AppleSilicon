@@ -3038,3 +3038,34 @@ def reset_recordings():
 def reset_negative_samples():
     _reset_audio_dir(NEGATIVE_DIR)
     return {"ok": True, "negative_count": len(_list_negative_samples())}
+
+
+@app.get("/api/training_history")
+def training_history_words():
+    TRAINED_WAKE_WORDS_DIR.mkdir(parents=True, exist_ok=True)
+    words = sorted(
+        p.name[: -len("_history.jsonl")]
+        for p in TRAINED_WAKE_WORDS_DIR.glob("*_history.jsonl")
+    )
+    return {"words": words}
+
+
+@app.get("/api/training_history/{word}")
+def training_history_for_word(word: str):
+    safe = re.sub(r"[^a-z0-9_]+", "", re.sub(r"\s+", "_", word.lower()))
+    if not safe:
+        return {"runs": []}
+    history_path = TRAINED_WAKE_WORDS_DIR / f"{safe}_history.jsonl"
+    if not history_path.exists():
+        return {"runs": []}
+    runs = []
+    for line in history_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            runs.append(json.loads(line))
+        except Exception:
+            continue
+    runs.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+    return {"runs": runs}
