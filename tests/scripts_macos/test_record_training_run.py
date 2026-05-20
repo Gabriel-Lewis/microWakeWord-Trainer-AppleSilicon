@@ -10,7 +10,7 @@ import record_training_run as rtr
 
 
 def test_safe_word_lowercases():
-    assert rtr._safe_word("Hey Tater") == "hey_tater"
+    assert rtr._safe_word("Hey Computer") == "hey_computer"
 
 
 def test_safe_word_strips_non_alnum():

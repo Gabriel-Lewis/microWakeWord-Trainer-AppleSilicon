@@ -19,9 +19,9 @@ The launcher manages its own venv at `.recorder-venv` (Python 3.11, fastapi + uv
 ## Running the Training Pipeline Directly
 
 ```bash
-./train_microwakeword_macos.sh "hey_tater"
-./train_microwakeword_macos.sh "hey_tater" 50000 100 --language fr
-./train_microwakeword_macos.sh "hey_tater" 50000 100 --piper-model /path/to/voice.pt
+./train_microwakeword_macos.sh "hey_computer"
+./train_microwakeword_macos.sh "hey_computer" 50000 100 --language fr
+./train_microwakeword_macos.sh "hey_computer" 50000 100 --piper-model /path/to/voice.pt
 ```
 
 Training uses a separate venv at `.venv` (Python 3.11, arm64, TF/Keras/Metal pinned stack). Key pinned versions: `tensorflow-macos==2.16.2`, `tensorflow-metal==1.2.0`, `keras==3.3.3`, `torch==2.9.0`. Rebuild `.venv` with `rm -rf .venv` if version drift is detected.

@@ -1,11 +1,4 @@
-<div align="center">
-  <a href="https://taterassistant.com">
-    <img src="images/tater-repo-logo.png" alt="microWakeWord Trainer" width="460"/>
-  </a>
-</div>
-<h3 align="center">
-  <a href="https://taterassistant.com">taterassistant.com</a>
-</h3>
+# MicroWakeWord Trainer Apple Silicon
 
 Train custom microWakeWord models on Apple Silicon with a local web UI, generated Piper samples, device-captured samples, reviewed false-wake negatives, live training logs, and ESPHome firmware flashing.
 
@@ -175,7 +168,7 @@ Piper voices, generated samples, and feature caches are also reused when the sel
 
 ## Firmware Flashing
 
-The `Firmware` tab builds and flashes Tater firmware for supported ESPHome sats.
+The `Firmware` tab builds and flashes ESPHome firmware for supported sats.
 
 - Downloads the latest firmware YAML templates from the [microWakeWords](https://github.com/TaterTotterson/microWakeWords) repo on GitHub.
 - Lets you choose `VoicePE` or `Satellite1`.
@@ -214,7 +207,7 @@ trained_models/
 Run the Apple Silicon training pipeline directly:
 
 ```bash
-./train_microwakeword_macos.sh "hey_tater"
+./train_microwakeword_macos.sh "hey_computer"
 ```
 
 If `personal_samples/*.wav` or `negative_samples/*.wav` exists, those samples are included automatically.

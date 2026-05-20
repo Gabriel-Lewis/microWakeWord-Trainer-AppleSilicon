@@ -1725,7 +1725,7 @@ def _firmware_template_fields(template_key: str, base_url: str = "", profile_key
         elif key_text == "wake_word_name":
             if selected_wake_word_row:
                 value = str(selected_wake_word_row.get("wake_word_name") or selected_wake_word_row.get("key") or "")
-            placeholder = "hey_tater"
+            placeholder = "hey_computer"
         elif key_text == "wake_word_triggered_sound_file":
             placeholder = "https://.../wake-sound.mp3"
             description = "Pick a prebuilt wake sound above or paste any custom audio URL."
