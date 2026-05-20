@@ -627,4 +627,18 @@ json_path.write_text(json.dumps(meta, indent=2))
 print(f"📦 Wrote {dst} and {json_path} (wake word: {target!r})")
 PY
 
+# ── (K) record training run ─────────────────────────────────────────────────
+echo "📊 Recording training run to history…"
+"$PY" scripts_macos/record_training_run.py \
+  --wake-word "$TARGET_WORD" \
+  --calibration-json "$CALIBRATION_JSON" \
+  --training-yaml "training_parameters.yaml" \
+  --max-tts-samples "$MAX_TTS_SAMPLES" \
+  --batch-size "$BATCH_SIZE" \
+  --piper-models "$PIPER_MODELS_CSV" \
+  --personal-samples-dir "personal_samples" \
+  --negative-samples-dir "negative_samples" \
+  --output-dir "${TRAINED_WAKE_WORDS_DIR:-generated/trained_wake_words}" \
+  || echo "⚠️  Training run recording failed (non-fatal)."
+
 echo "🎉 Done."
