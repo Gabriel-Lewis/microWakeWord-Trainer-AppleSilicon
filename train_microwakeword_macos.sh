@@ -243,7 +243,7 @@ else
 fi
 "$PY" -m pip install -q -e ./deps/micro-wake-word || true
 
-# piper-sample-generator (Apple Silicon fork)
+# piper-sample-generator dependencies + model download
 bash scripts_macos/get_piper_generator.sh
 ensure_torch_audio_stack
 
@@ -260,7 +260,7 @@ PY
 export TARGET_WORD MAX_TTS_SAMPLES BATCH_SIZE LANGUAGE MWW_LANGUAGE
 
 # ── Ensure at least one model is provided (language-aware default) ────────────
-DEFAULT_MODEL_PT="deps/piper-sample-generator/models/en_US-libritts_r-medium.pt"
+DEFAULT_MODEL_PT="deps/piper-models/en_US-libritts_r-medium.pt"
 if [[ ${#PIPER_MODELS[@]} -eq 0 ]]; then
   if [[ "$LANGUAGE" == "en" ]]; then
     echo "ℹ️  No --piper-model provided; using default English voice:"
@@ -268,16 +268,16 @@ if [[ ${#PIPER_MODELS[@]} -eq 0 ]]; then
     mkdir -p "$(dirname "$DEFAULT_MODEL_PT")"
     if [[ ! -f "$DEFAULT_MODEL_PT" ]]; then
       wget -q -O "$DEFAULT_MODEL_PT" \
-        "https://github.com/TaterTotterson/piper-sample-generator/releases/download/models/en_US-libritts_r-medium.pt"
+        "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt"
     fi
     PIPER_MODELS=("$DEFAULT_MODEL_PT")
   else
     shopt -s nullglob
-    language_voice_models=(deps/piper-sample-generator/voices/"${LANGUAGE}"_*.onnx)
+    language_voice_models=(deps/piper-models/voices/"${LANGUAGE}"_*.onnx)
     shopt -u nullglob
     if [[ ${#language_voice_models[@]} -eq 0 ]]; then
       echo "❌ No Piper ONNX voice models found for language '${LANGUAGE}'."
-      echo "   Expected files matching: piper-sample-generator/voices/${LANGUAGE}_*.onnx"
+      echo "   Expected files matching: deps/piper-models/voices/${LANGUAGE}_*.onnx"
       echo "   Add voice files or choose English (en)."
       exit 1
     fi
@@ -424,7 +424,7 @@ if [[ "$sample_cache_hit" != "true" ]]; then
   generator_cmd=(
     "$PY"
     "scripts_macos/run_generator_with_progress.py"
-    "--generator" "deps/piper-sample-generator/generate_samples.py"
+    "--generator" "scripts_macos/generate_samples.py"
     "--output-dir" "generated/generated_samples"
     "--max-samples" "$MAX_TTS_SAMPLES"
     "--"

@@ -30,7 +30,7 @@ Training uses a separate venv at `.venv` (Python 3.11, arm64, TF/Keras/Metal pin
 
 **Two separate Python environments:**
 - `.recorder-venv` — UI server only (fastapi, uvicorn, esphome, piper catalog fetching)
-- `.venv` — ML training stack (TF/Metal, Keras, PyTorch, microwakeword, piper-sample-generator)
+- `.venv` — ML training stack (TF/Metal, Keras, PyTorch, microwakeword, piper-tts)
 
 **`trainer_server.py`** — single-file FastAPI app (~2700 lines). All UI state is in a global `STATE` dict protected by `STATE_LOCK`. Long-running jobs (training, firmware flash) run in background threads with streamed log output via SSE-like polling endpoints. Key API surfaces:
 - `/api/train` / `/api/train_status` — launch and poll training subprocess
@@ -41,7 +41,7 @@ Training uses a separate venv at `.venv` (Python 3.11, arm64, TF/Keras/Metal pin
 **`static/index.html`** — single-page frontend (no build step). Tabs: Trainer, Captured Audio, Samples, Firmware.
 
 **`scripts_macos/`** — Python helper scripts invoked by the training shell script in order:
-1. `get_piper_generator.sh` — clones/updates piper-sample-generator fork
+1. `get_piper_generator.sh` — installs piper-tts deps + downloads default EN voice model to `deps/piper-models/`
 2. `run_generator_with_progress.py` — wraps piper TTS generation with progress
 3. `prepare_datasets.py` — downloads/resamples MIT RIR, AudioSet, FMA, WHAM, CHiME to 16 kHz
 4. `trim_silence.py` — silero-VAD silence trimming on personal samples
@@ -67,8 +67,10 @@ Training uses a separate venv at `.venv` (Python 3.11, arm64, TF/Keras/Metal pin
 | `negative_datasets/` | Downloaded precomputed negative feature sets |
 | `trained_wake_words/` | Final output: `<word>.tflite` + `<word>.json` |
 | `trained_models/` | Intermediate checkpoints, cleared each run |
-| `deps/piper-sample-generator/` | TTS generator (Apple Silicon fork, auto-updated) |
+| `deps/piper-models/` | Downloaded piper voice model files (`.pt`, `.onnx`, gitignored) |
 | `deps/micro-wake-word/` | microWakeWord library (Apple Silicon fork, auto-updated) |
+| `scripts_macos/generate_samples.py` | Vendored piper sample generator script |
+| `scripts_macos/piper_train/` | Vendored piper VITS model code (dependency of generate_samples.py) |
 | `.cache/` | Piper voices catalog JSON, firmware flasher working dirs |
 
 ## Audio Normalization
