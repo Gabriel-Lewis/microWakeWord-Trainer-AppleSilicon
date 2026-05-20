@@ -230,3 +230,5 @@ Built on top of:
 
 - [microWakeWord](https://github.com/kahrendt/microWakeWord)
 - [piper-sample-generator](https://github.com/rhasspy/piper-sample-generator)
+
+Originally forked from [TaterTotterson/microWakeWord-Trainer-AppleSilicon](https://github.com/TaterTotterson/microWakeWord-Trainer-AppleSilicon). Thanks to TaterTotterson for the original trainer, Apple Silicon pipeline, and ESPHome firmware integrations that this project builds on.
