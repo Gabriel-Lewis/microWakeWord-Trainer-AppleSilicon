@@ -3281,7 +3281,7 @@
     const fmtRecall = v => v === null || v === undefined ? "—" : `<span class="recallBadge">${(v * 100).toFixed(2)}%</span>`;
     const fmtFaph = v => v === null || v === undefined ? "—" : `<span class="${v < 1 ? "faphBadge" : "warnBadge"}">${v.toFixed(3)}</span>`;
     const fmtNum = v => (v === null || v === undefined || v === 0) ? "—" : v.toLocaleString();
-    const fmtModels = arr => (arr && arr.length) ? arr.map(m => m.split("/").pop().replace(/\.(onnx|pt)$/, "")).join(", ") : "—";
+    const fmtModels = arr => (arr && arr.length) ? escapeHtml(arr.map(m => m.split("/").pop().replace(/\.(onnx|pt)$/, "")).join(", ")) : "—";
 
     let html = `<table>
 <thead><tr>
