@@ -1,11 +1,4 @@
-<div align="center">
-  <a href="https://taterassistant.com">
-    <img src="images/tater-repo-logo.png" alt="microWakeWord Trainer" width="460"/>
-  </a>
-</div>
-<h3 align="center">
-  <a href="https://taterassistant.com">taterassistant.com</a>
-</h3>
+# MicroWakeWord Trainer Apple Silicon
 
 Train custom microWakeWord models on Apple Silicon with a local web UI, generated Piper samples, device-captured samples, reviewed false-wake negatives, live training logs, and ESPHome firmware flashing.
 
@@ -26,7 +19,7 @@ Real samples come from device-captured wake audio, close misses, or manual uploa
 ## Clone The Repo
 
 ```bash
-git clone https://github.com/TaterTotterson/microWakeWord-Trainer-AppleSilicon.git
+git clone https://github.com/Gabriel-Lewis/microWakeWord-Trainer-AppleSilicon.git
 cd microWakeWord-Trainer-AppleSilicon
 ```
 
@@ -66,7 +59,7 @@ If you change `REC_PORT`, use that same port in the ESPHome `Trainer App URL`.
 
 ## Captured Audio Workflow
 
-To collect samples from a sat, flash it with the Tater firmware from [TaterTotterson/microWakeWords](https://github.com/TaterTotterson/microWakeWords). The `Firmware` tab can build and flash the VoicePE or Satellite1 YAMLs directly from that repo.
+To collect samples from a sat, flash it with the ESPHome firmware from [microWakeWords](https://github.com/TaterTotterson/microWakeWords). The `Firmware` tab can build and flash the VoicePE or Satellite1 YAMLs directly from that repo.
 
 After flashing, the device exposes ESPHome entities for capture setup:
 
@@ -175,9 +168,9 @@ Piper voices, generated samples, and feature caches are also reused when the sel
 
 ## Firmware Flashing
 
-The `Firmware` tab builds and flashes Tater firmware for supported ESPHome sats.
+The `Firmware` tab builds and flashes ESPHome firmware for supported sats.
 
-- Downloads the latest firmware YAML templates from `TaterTotterson/microWakeWords` on GitHub.
+- Downloads the latest firmware YAML templates from the [microWakeWords](https://github.com/TaterTotterson/microWakeWords) repo on GitHub.
 - Lets you choose `VoicePE` or `Satellite1`.
 - Auto-detects ESPHome devices with mDNS when available.
 - Allows manual IP or hostname entry if discovery does not find the device.
@@ -214,7 +207,7 @@ trained_models/
 Run the Apple Silicon training pipeline directly:
 
 ```bash
-./train_microwakeword_macos.sh "hey_tater"
+./train_microwakeword_macos.sh "hey_computer"
 ```
 
 If `personal_samples/*.wav` or `negative_samples/*.wav` exists, those samples are included automatically.
@@ -237,3 +230,5 @@ Built on top of:
 
 - [microWakeWord](https://github.com/kahrendt/microWakeWord)
 - [piper-sample-generator](https://github.com/rhasspy/piper-sample-generator)
+
+Originally forked from [TaterTotterson/microWakeWord-Trainer-AppleSilicon](https://github.com/TaterTotterson/microWakeWord-Trainer-AppleSilicon). Thanks to TaterTotterson for the original trainer, Apple Silicon pipeline, and ESPHome firmware integrations that this project builds on.

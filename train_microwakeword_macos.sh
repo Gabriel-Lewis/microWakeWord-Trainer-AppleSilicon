@@ -2,7 +2,7 @@
 # train_microwakeword_macos.sh
 # One-shot: setup (idempotent) + run pipeline on Apple Silicon (macOS).
 # Usage:
-#   ./train_microwakeword_macos.sh "hey_tater" 50000 100 \
+#   ./train_microwakeword_macos.sh "hey_computer" 50000 100 \
 #       --language en \
 #       --piper-model /path/to/voice1.onnx --piper-model /path/to/voice2.pt
 #
@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-TARGET_WORD="${1:-hey_tater}"
+TARGET_WORD="${1:-hey_computer}"
 MAX_TTS_SAMPLES="${2:-50000}"
 BATCH_SIZE="${3:-100}"
 [[ $# -ge 3 ]] && shift 3 || shift $#
@@ -243,7 +243,7 @@ else
 fi
 "$PY" -m pip install -q -e ./deps/micro-wake-word || true
 
-# piper-sample-generator (TaterTotterson fork)
+# piper-sample-generator (Apple Silicon fork)
 bash scripts_macos/get_piper_generator.sh
 ensure_torch_audio_stack
 
@@ -608,8 +608,8 @@ if calibration_path.exists():
 meta = {
   "type": "micro",
   "wake_word": target,
-  "author": "Tater Totterson",
-  "website": "https://github.com/TaterTotterson/microWakeWord-Trainer-AppleSilicon",
+  "author": os.environ.get("MWW_AUTHOR", ""),
+  "website": "https://github.com/Gabriel-Lewis/microWakeWord-Trainer-AppleSilicon",
   "model": f"{safe}.tflite",
   "trained_languages": [language],
   "version": 2,
