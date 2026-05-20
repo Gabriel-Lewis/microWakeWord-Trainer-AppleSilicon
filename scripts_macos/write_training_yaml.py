@@ -12,15 +12,15 @@ config = {
     {"features_dir": "datasets/negative_datasets/no_speech",  "sampling_weight": 5.0, "penalty_weight": 1.0, "truth": False, "truncation_strategy": "random",         "type": "mmap"},
     {"features_dir": "datasets/negative_datasets/dinner_party_eval","sampling_weight": 0.0,"penalty_weight":1.0,"truth": False,"truncation_strategy":"split","type":"mmap"},
   ],
-  "training_steps": [40000],
+  "training_steps": [20000, 10000, 10000],
   "positive_class_weight": [1],
   "negative_class_weight": [20],
-  "learning_rates": [0.001],
+  "learning_rates": [0.001, 0.0005, 0.0001],
   "batch_size": 128,
-  "time_mask_max_size": [0],
-  "time_mask_count": [0],
-  "freq_mask_max_size": [0],
-  "freq_mask_count": [0],
+  "time_mask_max_size": [5],
+  "time_mask_count": [2],
+  "freq_mask_max_size": [5],
+  "freq_mask_count": [2],
   "eval_step_interval": 500,
   "clip_duration_ms": 1500,
   "target_minimization": 0.9,
@@ -30,8 +30,9 @@ config = {
 
 # Add personal features if they exist
 if os.path.exists("generated/personal_augmented_features/training"):
-    config["features"].insert(1, {"features_dir": "generated/personal_augmented_features", "sampling_weight": 3.0, "penalty_weight": 1.0, "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"})
-    print("✅ Added personal features with higher weight (3.0)")
+    personal_weight = float(os.environ.get("MWW_PERSONAL_SAMPLING_WEIGHT", "6.0"))
+    config["features"].insert(1, {"features_dir": "generated/personal_augmented_features", "sampling_weight": personal_weight, "penalty_weight": 1.0, "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"})
+    print(f"✅ Added personal features with sampling_weight={personal_weight}")
 
 # Add reviewed false-positive features if they exist
 if os.path.exists("generated/reviewed_negative_features/training"):

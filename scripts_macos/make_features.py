@@ -52,7 +52,7 @@ if os.path.exists("./personal_samples") and any(Path("./personal_samples").glob(
         input_directory="./personal_samples",
         file_pattern="*.wav",
         max_clip_duration_s=5,
-        remove_silence=True,
+        remove_silence=False,
         random_split_seed=10,
         split_count=0.1,
     )
@@ -89,8 +89,8 @@ augmenter = Augmentation(
     },
     impulse_paths=impulse_paths,
     background_paths=background_paths,
-    background_min_snr_db=5,
-    background_max_snr_db=10,
+    background_min_snr_db=3,
+    background_max_snr_db=20,
     min_jitter_s=0.2,
     max_jitter_s=0.3,
 )
