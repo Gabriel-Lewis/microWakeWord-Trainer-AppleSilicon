@@ -63,6 +63,7 @@ TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
 TARGET_SAMPLE_WIDTH_BYTES = 2
 CAPTURE_GAIN_PROFILE = "capture_rms_v1"
+MAX_UPLOAD_BYTES = int(os.environ.get("MWW_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
 FIRMWARE_CACHE_DIR = ROOT_DIR / ".cache" / "firmware_flasher"
 FIRMWARE_HELPER = ROOT_DIR / "scripts_macos" / "flash_esphome_ota.py"
 FIRMWARE_DEFAULT_OTA_PORT = int(os.environ.get("ESPHOME_OTA_PORT", "3232"))
@@ -916,6 +917,35 @@ def _save_audio_sample(
     }
 
 
+class UploadTooLargeError(ValueError):
+    pass
+
+
+async def _read_upload_capped(file: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise UploadTooLargeError(f"Upload exceeds {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _read_body_capped(request: Request, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise UploadTooLargeError(f"Upload exceeds {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _save_personal_sample(data: bytes, original_name: str, out_name: str | None = None) -> Dict[str, Any]:
     return _save_audio_sample(
         data,
@@ -1121,7 +1151,7 @@ def _run_training_background(safe_word: str, language: str):
         with open(log_path, "w", encoding="utf-8") as lf:
             env = os.environ.copy()
             env["MWW_LANGUAGE"] = language
-            proc = subprocess.Popen(
+            with subprocess.Popen(
                 cmd,
                 cwd=str(ROOT_DIR),
                 stdout=subprocess.PIPE,
@@ -1129,14 +1159,14 @@ def _run_training_background(safe_word: str, language: str):
                 text=True,
                 bufsize=1,
                 env=env,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                lf.write(line)
-                lf.flush()
-                _append_train_log(line)
+            ) as proc:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    lf.write(line)
+                    lf.flush()
+                    _append_train_log(line)
 
-            rc = proc.wait()
+                rc = proc.wait()
 
         _append_train_log(f"✓ Training finished (exit_code={rc})")
         with STATE_LOCK:
@@ -1387,6 +1417,20 @@ def _firmware_cache_slug(*parts: Any) -> str:
     return (slug[:96] or "default").lower()
 
 
+FIRMWARE_VALUE_MAX_LEN = 512
+
+
+def _sanitize_firmware_value(raw: Any) -> str:
+    text = "" if raw is None else str(raw)
+    text = text.replace("\r", "").replace("\n", " ")
+    text = "".join(ch for ch in text if ch == "\t" or ord(ch) >= 0x20)
+    if len(text) > FIRMWARE_VALUE_MAX_LEN:
+        raise ValueError(
+            f"Firmware profile value exceeds {FIRMWARE_VALUE_MAX_LEN} characters"
+        )
+    return text
+
+
 def _firmware_build_cache_path(
     template_key: str,
     normalized: Dict[str, str],
@@ -1438,6 +1482,7 @@ def _firmware_profile_values_for_template(profile: Dict[str, Any], substitutions
 
 
 def _normalize_firmware_profile_update(template_key: str, values: Dict[str, Any], profile_key: str = "") -> Dict[str, str]:
+    values = {str(k): _sanitize_firmware_value(v) for k, v in (values or {}).items()}
     ctx = _load_firmware_template_context(template_key, profile_key)
     spec = ctx["spec"]
     profile = ctx.get("profile") if isinstance(ctx.get("profile"), dict) else {}
@@ -1700,6 +1745,8 @@ def _render_firmware_config(
     session_id: str,
     port: Any = None,
 ) -> tuple[Path, Dict[str, str], Path]:
+    values = {str(k): _sanitize_firmware_value(v) for k, v in (values or {}).items()}
+    host = _sanitize_firmware_value(host)
     profile_key = _firmware_profile_key(template_key, host, port)
     ctx = _load_firmware_template_context(template_key, profile_key)
     spec = ctx["spec"]
@@ -1921,7 +1968,7 @@ def _run_firmware_flash_background(session_id: str):
 
     try:
         env = _firmware_runner_env()
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             command,
             cwd=str(ROOT_DIR),
             stdout=subprocess.PIPE,
@@ -1929,18 +1976,18 @@ def _run_firmware_flash_background(session_id: str):
             text=True,
             bufsize=1,
             env=env,
-        )
-        with FIRMWARE_LOCK:
-            live = FIRMWARE_SESSIONS.get(session_id)
-            if isinstance(live, dict):
-                live["pid"] = int(proc.pid or 0)
-                live["message"] = "Firmware upload running."
+        ) as proc:
+            with FIRMWARE_LOCK:
+                live = FIRMWARE_SESSIONS.get(session_id)
+                if isinstance(live, dict):
+                    live["pid"] = int(proc.pid or 0)
+                    live["message"] = "Firmware upload running."
 
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            for part in line.replace("\r", "\n").splitlines():
-                _append_firmware_log(session_id, part)
-        rc = proc.wait()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                for part in line.replace("\r", "\n").splitlines():
+                    _append_firmware_log(session_id, part)
+            rc = proc.wait()
 
         if rc == 0:
             _append_firmware_log(session_id, f"✓ Firmware flash finished (exit_code={rc})")
@@ -2009,7 +2056,7 @@ def _run_firmware_build_flash_background(session_id: str):
 
     try:
         env = _firmware_runner_env(include_esphome_pythonpath=True)
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             command,
             cwd=str(ROOT_DIR),
             stdout=subprocess.PIPE,
@@ -2017,19 +2064,19 @@ def _run_firmware_build_flash_background(session_id: str):
             text=True,
             bufsize=1,
             env=env,
-        )
-        with FIRMWARE_LOCK:
-            live = FIRMWARE_SESSIONS.get(session_id)
-            if isinstance(live, dict):
-                live["pid"] = int(proc.pid or 0)
-                live["message"] = "Firmware build + flash running."
-                live["config_path"] = str(config_path)
+        ) as proc:
+            with FIRMWARE_LOCK:
+                live = FIRMWARE_SESSIONS.get(session_id)
+                if isinstance(live, dict):
+                    live["pid"] = int(proc.pid or 0)
+                    live["message"] = "Firmware build + flash running."
+                    live["config_path"] = str(config_path)
 
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            for part in line.replace("\r", "\n").splitlines():
-                _append_firmware_log(session_id, part)
-        rc = proc.wait()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                for part in line.replace("\r", "\n").splitlines():
+                    _append_firmware_log(session_id, part)
+            rc = proc.wait()
 
         if rc == 0:
             _append_firmware_log(session_id, f"✓ Firmware build + flash finished (exit_code={rc})")
@@ -2150,14 +2197,17 @@ def _discover_with_dns_sd(timeout_seconds: float) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-    try:
-        time.sleep(max(0.5, timeout_seconds))
-        proc.terminate()
-        output, _ = proc.communicate(timeout=1.5)
-    except Exception:
-        with contextlib.suppress(Exception):
-            proc.kill()
-        output = ""
+    with proc:
+        try:
+            time.sleep(max(0.5, timeout_seconds))
+            proc.terminate()
+            output, _ = proc.communicate(timeout=1.5)
+        except Exception:
+            with contextlib.suppress(Exception):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                proc.communicate(timeout=1.0)
+            output = ""
 
     devices: List[Dict[str, Any]] = []
     for line in (output or "").splitlines():
@@ -2268,7 +2318,7 @@ def get_session():
             "takes_per_speaker": STATE["takes_per_speaker"],
             "takes_received": len(takes),
             "takes": list(takes),
-            "training": dict(STATE["training"]),
+            "training": {**STATE["training"], "log_lines": list(STATE["training"].get("log_lines") or [])},
             "available_languages": available_languages,
         }
 
@@ -2295,7 +2345,10 @@ async def upload_take(
 
     out_name = f"speaker{speaker_index:02d}_take{take_index:02d}.wav"
 
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     try:
         result = _save_personal_sample(data, file.filename or out_name, out_name=out_name)
     except Exception as e:
@@ -2313,7 +2366,10 @@ async def upload_personal_sample(file: UploadFile = File(...)):
     if not safe_word:
         return JSONResponse({"ok": False, "error": "No active session. Call /api/start_session first."}, status_code=400)
 
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     try:
         result = _save_personal_sample(data, file.filename or "sample")
     except Exception as e:
@@ -2336,7 +2392,10 @@ async def upload_captured_audio(
     notes: str | None = Form(None),
     metadata_json: str | None = Form(None),
 ):
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     try:
         result = _save_captured_sample(data, file.filename or "captured")
     except Exception as e:
@@ -2401,7 +2460,10 @@ async def upload_captured_audio_raw(
     x_average_probability: str | None = Header(default=None),
     x_notes: str | None = Header(default=None),
 ):
-    raw_data = await request.body()
+    try:
+        raw_data = await _read_body_capped(request)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     audio_format = (x_audio_format or "wav").strip().lower()
 
     try:
@@ -2835,7 +2897,10 @@ async def firmware_flash(
     if not filename.lower().endswith(".bin"):
         return JSONResponse({"ok": False, "error": "Firmware upload must be a compiled .bin file."}, status_code=400)
 
-    data = await file.read()
+    try:
+        data = await _read_upload_capped(file)
+    except UploadTooLargeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
     if not data:
         return JSONResponse({"ok": False, "error": "Firmware file is empty."}, status_code=400)
     if not FIRMWARE_HELPER.exists():
@@ -2929,7 +2994,9 @@ def train_now(payload: Dict[str, Any] = None):
 @app.get("/api/train_status")
 def train_status():
     with STATE_LOCK:
-        return {"ok": True, "training": dict(STATE["training"])}
+        snapshot = dict(STATE["training"])
+        snapshot["log_lines"] = list(snapshot.get("log_lines") or [])
+    return {"ok": True, "training": snapshot}
 
 
 @app.post("/api/reset_recordings")

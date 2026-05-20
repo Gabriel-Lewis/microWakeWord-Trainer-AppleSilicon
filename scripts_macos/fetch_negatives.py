@@ -1,5 +1,4 @@
 # scripts_macos/fetch_negatives.py
-import os
 import shutil
 import requests, zipfile, sys
 from pathlib import Path
@@ -19,9 +18,10 @@ def download(url: str, out: Path):
         for chunk in r.iter_content(chunk_size=1024):
             f.write(chunk)
             bar.update(len(chunk))
-    if total and tmp.stat().st_size != total:
+    actual = tmp.stat().st_size
+    if total and actual != total:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"Truncated download for {out.name}: got {tmp.stat().st_size} of {total} bytes")
+        raise RuntimeError(f"Truncated download for {out.name}: got {actual} of {total} bytes")
     tmp.replace(out)
 
 
