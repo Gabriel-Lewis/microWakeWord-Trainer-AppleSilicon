@@ -2,17 +2,37 @@
 
 import os
 import sys
-
-from mmap_ninja.ragged import RaggedMmap
-from microwakeword.audio.augmentation import Augmentation
-from microwakeword.audio.clips import Clips
-from microwakeword.audio.spectrograms import SpectrogramGeneration
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True, write_through=True)
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True, write_through=True)
+
+
+IMPULSE_PATHS = ["datasets/mit_rirs"]
+BACKGROUND_PATHS = [
+    "datasets/wham_16k",
+    "datasets/chime_16k",
+    "datasets/fma_16k",
+    "datasets/audioset_16k",
+]
+AUGMENTATION_PROBABILITIES = {
+    "SevenBandParametricEQ": 0.1,
+    "TanhDistortion": 0.05,
+    "PitchShift": 0.15,
+    "BandStopFilter": 0.1,
+    "AddColorNoise": 0.1,
+    "AddBackgroundNoise": 0.7,
+    "Gain": 0.8,
+    "RIR": 0.7,
+}
+SPLIT_CFG = {
+    "training":   {"name": "train",      "repetition": 2, "slide_frames": 10},
+    "validation": {"name": "validation", "repetition": 1, "slide_frames": 1},
+    "testing":    {"name": "test",       "repetition": 1, "slide_frames": 1},
+}
 
 
 def validate(paths):
@@ -22,151 +42,98 @@ def validate(paths):
     print(f"✅ Validated all {len(paths)} dataset directories")
 
 
-impulse_paths = ["datasets/mit_rirs"]
-background_paths = [
-    "datasets/wham_16k",
-    "datasets/chime_16k",
-    "datasets/fma_16k",
-    "datasets/audioset_16k",
-]
-validate(impulse_paths + background_paths)
-print("⏳ Preparing clip indexes and augmentation pipeline (please wait)…")
+def _build_features_for_source(label: str, input_directory: str, out_root: str, remove_silence: bool) -> str:
+    """Run in worker process. Builds train/val/test mmaps for one source."""
+    from mmap_ninja.ragged import RaggedMmap
+    from microwakeword.audio.augmentation import Augmentation
+    from microwakeword.audio.clips import Clips
+    from microwakeword.audio.spectrograms import SpectrogramGeneration
 
-tts_wav_count = len(list(Path("./generated/generated_samples").glob("*.wav")))
-print(f"🎤 Generated sample count: {tts_wav_count}")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)
 
-# Process TTS generated samples (default)
-clips_tts = Clips(
-    input_directory="./generated/generated_samples",
-    file_pattern="*.wav",
-    max_clip_duration_s=5,
-    remove_silence=True,
-    random_split_seed=10,
-    split_count=0.1,
-)
-
-# Process personal recordings if available (optional)
-clips_personal = None
-if os.path.exists("./personal_samples") and any(Path("./personal_samples").glob("*.wav")):
-    clips_personal = Clips(
-        input_directory="./personal_samples",
+    clips = Clips(
+        input_directory=input_directory,
         file_pattern="*.wav",
         max_clip_duration_s=5,
-        remove_silence=False,
+        remove_silence=remove_silence,
         random_split_seed=10,
         split_count=0.1,
     )
-    print("✅ Found personal samples, will create separate feature set")
-else:
-    print("ℹ️ No personal samples found; continuing with generated samples only")
-
-# Process reviewed false-positive samples if available (optional)
-clips_reviewed_negative = None
-if os.path.exists("./negative_samples") and any(Path("./negative_samples").glob("*.wav")):
-    clips_reviewed_negative = Clips(
-        input_directory="./negative_samples",
-        file_pattern="*.wav",
-        max_clip_duration_s=5,
-        remove_silence=False,
-        random_split_seed=10,
-        split_count=0.1,
+    augmenter = Augmentation(
+        augmentation_duration_s=3.2,
+        augmentation_probabilities=AUGMENTATION_PROBABILITIES,
+        impulse_paths=IMPULSE_PATHS,
+        background_paths=BACKGROUND_PATHS,
+        background_min_snr_db=3,
+        background_max_snr_db=20,
+        min_jitter_s=0.2,
+        max_jitter_s=0.3,
     )
-    print("✅ Found reviewed negative samples, will create a separate negative feature set")
-else:
-    print("ℹ️ No reviewed negative samples found; continuing with stock negative datasets only")
-
-augmenter = Augmentation(
-    augmentation_duration_s=3.2,
-    augmentation_probabilities={
-        "SevenBandParametricEQ": 0.1,
-        "TanhDistortion": 0.05,
-        "PitchShift": 0.15,
-        "BandStopFilter": 0.1,
-        "AddColorNoise": 0.1,
-        "AddBackgroundNoise": 0.7,
-        "Gain": 0.8,
-        "RIR": 0.7,
-    },
-    impulse_paths=impulse_paths,
-    background_paths=background_paths,
-    background_min_snr_db=3,
-    background_max_snr_db=20,
-    min_jitter_s=0.2,
-    max_jitter_s=0.3,
-)
-
-out_root = Path("generated/generated_augmented_features")
-out_root.mkdir(exist_ok=True)
-
-split_cfg = {
-    "training":   {"name": "train",      "repetition": 2, "slide_frames": 10},
-    "validation": {"name": "validation", "repetition": 1, "slide_frames": 10},
-    "testing":    {"name": "test",       "repetition": 1, "slide_frames": 1},
-}
-
-# Process TTS samples
-for split, cfg in split_cfg.items():
-    out_dir = out_root / split
-    out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"🧪 Processing {split} (TTS) …")
-    print("⏳ Building spectrogram mmap; first progress update can take a moment…")
-    spectros = SpectrogramGeneration(
-        clips=clips_tts,
-        augmenter=augmenter,
-        slide_frames=cfg["slide_frames"],
-        step_ms=10,
-    )
-    RaggedMmap.from_generator(
-        out_dir=str(out_dir / "wakeword_mmap"),
-        sample_generator=spectros.spectrogram_generator(
-            split=cfg["name"],
-            repeat=cfg["repetition"],
-        ),
-        batch_size=100,
-        verbose=True,
-    )
-
-# Process personal samples if available
-if clips_personal is not None:
-    out_root_personal = Path("generated/personal_augmented_features")
-    out_root_personal.mkdir(exist_ok=True)
-    for split, cfg in split_cfg.items():
-        out_dir = out_root_personal / split
+    out_root_path = Path(out_root)
+    out_root_path.mkdir(parents=True, exist_ok=True)
+    for split, cfg in SPLIT_CFG.items():
+        out_dir = out_root_path / split
         out_dir.mkdir(parents=True, exist_ok=True)
-        print(f"🧪 Processing {split} (personal) …")
-        print("⏳ Building personal spectrogram mmap; first progress update can take a moment…")
+        print(f"🧪 [{label}] Processing {split} …", flush=True)
         spectros = SpectrogramGeneration(
-            clips=clips_personal,
+            clips=clips,
             augmenter=augmenter,
             slide_frames=cfg["slide_frames"],
             step_ms=10,
         )
         RaggedMmap.from_generator(
             out_dir=str(out_dir / "wakeword_mmap"),
-            sample_generator=spectros.spectrogram_generator(split=cfg["name"], repeat=cfg["repetition"]),
+            sample_generator=spectros.spectrogram_generator(
+                split=cfg["name"],
+                repeat=cfg["repetition"],
+            ),
             batch_size=100,
             verbose=True,
         )
+    return label
 
-# Process reviewed negative samples if available
-if clips_reviewed_negative is not None:
-    out_root_negative = Path("generated/reviewed_negative_features")
-    out_root_negative.mkdir(exist_ok=True)
-    for split, cfg in split_cfg.items():
-        out_dir = out_root_negative / split
-        out_dir.mkdir(parents=True, exist_ok=True)
-        print(f"🧪 Processing {split} (reviewed negatives) …")
-        print("⏳ Building reviewed negative spectrogram mmap; first progress update can take a moment…")
-        spectros = SpectrogramGeneration(
-            clips=clips_reviewed_negative,
-            augmenter=augmenter,
-            slide_frames=cfg["slide_frames"],
-            step_ms=10,
-        )
-        RaggedMmap.from_generator(
-            out_dir=str(out_dir / "wakeword_mmap"),
-            sample_generator=spectros.spectrogram_generator(split=cfg["name"], repeat=cfg["repetition"]),
-            batch_size=100,
-            verbose=True,
-        )
-print("✅ Features ready.")
+
+def main():
+    validate(IMPULSE_PATHS + BACKGROUND_PATHS)
+    print("⏳ Preparing clip indexes and augmentation pipeline (please wait)…")
+
+    tts_wav_count = len(list(Path("./generated/generated_samples").glob("*.wav")))
+    print(f"🎤 Generated sample count: {tts_wav_count}")
+
+    sources = [
+        ("TTS", "./generated/generated_samples", "generated/generated_augmented_features", True),
+    ]
+    if os.path.exists("./personal_samples") and any(Path("./personal_samples").glob("*.wav")):
+        sources.append(("personal", "./personal_samples", "generated/personal_augmented_features", False))
+        print("✅ Found personal samples, will create separate feature set")
+    else:
+        print("ℹ️ No personal samples found; continuing with generated samples only")
+
+    if os.path.exists("./negative_samples") and any(Path("./negative_samples").glob("*.wav")):
+        sources.append(("reviewed negatives", "./negative_samples", "generated/reviewed_negative_features", False))
+        print("✅ Found reviewed negative samples, will create a separate negative feature set")
+    else:
+        print("ℹ️ No reviewed negative samples found; continuing with stock negative datasets only")
+
+    max_workers = max(1, min(int(os.environ.get("MWW_FEATURE_WORKERS", "2")), len(sources)))
+    if max_workers == 1 or len(sources) == 1:
+        for label, in_dir, out_root, remove_silence in sources:
+            _build_features_for_source(label, in_dir, out_root, remove_silence)
+    else:
+        print(f"⚙️ Building {len(sources)} feature sets in parallel (max_workers={max_workers})")
+        with ProcessPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_build_features_for_source, label, in_dir, out_root, remove_silence): label
+                for label, in_dir, out_root, remove_silence in sources
+            }
+            for fut in as_completed(futures):
+                label = futures[fut]
+                fut.result()  # re-raises any exception
+                print(f"✅ Finished feature set: {label}", flush=True)
+
+    print("✅ Features ready.")
+
+
+if __name__ == "__main__":
+    main()
