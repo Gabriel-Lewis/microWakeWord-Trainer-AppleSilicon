@@ -243,7 +243,7 @@ else
 fi
 "$PY" -m pip install -q -e ./deps/micro-wake-word || true
 
-# piper-sample-generator (TaterTotterson fork)
+# piper-sample-generator (Apple Silicon fork)
 bash scripts_macos/get_piper_generator.sh
 ensure_torch_audio_stack
 
@@ -608,8 +608,8 @@ if calibration_path.exists():
 meta = {
   "type": "micro",
   "wake_word": target,
-  "author": "Tater Totterson",
-  "website": "https://github.com/TaterTotterson/microWakeWord-Trainer-AppleSilicon",
+  "author": os.environ.get("MWW_AUTHOR", ""),
+  "website": "https://github.com/Gabriel-Lewis/microWakeWord-Trainer-AppleSilicon",
   "model": f"{safe}.tflite",
   "trained_languages": [language],
   "version": 2,

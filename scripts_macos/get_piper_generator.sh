@@ -24,12 +24,12 @@ download_file() {
 # venv assumed active outside
 mkdir -p deps
 if [[ ! -d "deps/piper-sample-generator" ]]; then
-  echo "⬇️ Cloning TaterTotterson/piper-sample-generator…"
+  echo "⬇️ Cloning piper-sample-generator…"
   git clone "$PIPER_REPO_URL" deps/piper-sample-generator >/dev/null
 else
   current_origin="$(git -C deps/piper-sample-generator remote get-url origin 2>/dev/null || true)"
   if [[ "$current_origin" != "$PIPER_REPO_URL" ]]; then
-    echo "🔁 Updating piper-sample-generator origin to TaterTotterson fork…"
+    echo "🔁 Updating piper-sample-generator origin…"
     git -C deps/piper-sample-generator remote set-url origin "$PIPER_REPO_URL"
   fi
 fi
