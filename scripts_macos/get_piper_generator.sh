@@ -2,7 +2,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PIPER_REPO_URL="https://github.com/TaterTotterson/piper-sample-generator.git"
 PYTHON="${PY:-python}"
 TORCH_VERSION="${TORCH_VERSION:-2.9.0}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-${TORCH_VERSION}}"
@@ -21,35 +20,30 @@ download_file() {
   fi
 }
 
-# venv assumed active outside
-mkdir -p deps
-if [[ ! -d "deps/piper-sample-generator" ]]; then
-  echo "⬇️ Cloning piper-sample-generator…"
-  git clone "$PIPER_REPO_URL" deps/piper-sample-generator >/dev/null
-else
-  current_origin="$(git -C deps/piper-sample-generator remote get-url origin 2>/dev/null || true)"
-  if [[ "$current_origin" != "$PIPER_REPO_URL" ]]; then
-    echo "🔁 Updating piper-sample-generator origin…"
-    git -C deps/piper-sample-generator remote set-url origin "$PIPER_REPO_URL"
+# venv assumed active outside — install only if not already present to avoid
+# inadvertently upgrading packages that the TF/Metal training stack requires pinned.
+_pip_install_if_missing() {
+  local pkg="$1"
+  local import_name="${2:-$1}"
+  if ! "$PYTHON" -c "import $import_name" 2>/dev/null; then
+    echo "📦 Installing ${pkg}…"
+    "$PYTHON" -m pip install -q "$pkg"
   fi
-fi
+}
 
-echo "📦 Installing piper-sample-generator in editable mode…"
-"$PYTHON" -m pip install -q -e ./deps/piper-sample-generator
+_pip_install_if_missing "piper-tts>=1.3.0,<2"   piper
+_pip_install_if_missing audiomentations           audiomentations
+_pip_install_if_missing "torch==${TORCH_VERSION}"    torch
+_pip_install_if_missing "torchaudio==${TORCHAUDIO_VERSION}" torchaudio
+_pip_install_if_missing piper-phonemize-cross==1.2.1 piper_phonemize
 
-# Torch/torchaudio for Mac (MPS works out of the box on Apple Silicon wheels)
-"$PYTHON" -m pip install -q "torch==${TORCH_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}"
-
-# (Kept for phonemization parity with your notebook)
-"$PYTHON" -m pip install -q piper-phonemize-cross==1.2.1
-
-MODELS_DIR="deps/piper-sample-generator/models"
-VOICES_DIR="deps/piper-sample-generator/voices"
+MODELS_DIR="deps/piper-models"
+VOICES_DIR="deps/piper-models/voices"
 mkdir -p "$MODELS_DIR" "$VOICES_DIR"
 
 # English multi-speaker model (used by --language=en)
 EN_MODEL_NAME="en_US-libritts_r-medium.pt"
-EN_MODEL_URL="https://github.com/TaterTotterson/piper-sample-generator/releases/download/models/${EN_MODEL_NAME}"
+EN_MODEL_URL="https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/${EN_MODEL_NAME}"
 if [[ ! -f "${MODELS_DIR}/${EN_MODEL_NAME}" ]]; then
   echo "⬇️ Downloading ${EN_MODEL_NAME}…"
   download_file "${EN_MODEL_URL}" "${MODELS_DIR}/${EN_MODEL_NAME}"
