@@ -69,7 +69,7 @@ FIRMWARE_HELPER = ROOT_DIR / "scripts_macos" / "flash_esphome_ota.py"
 FIRMWARE_DEFAULT_OTA_PORT = int(os.environ.get("ESPHOME_OTA_PORT", "3232"))
 FIRMWARE_DISCOVERY_SECONDS = float(os.environ.get("ESPHOME_DISCOVERY_SECONDS", "2.5"))
 FIRMWARE_MAX_LOG_LINES = int(os.environ.get("FIRMWARE_MAX_LOG_LINES", "500"))
-FIRMWARE_GITHUB_OWNER = os.environ.get("FIRMWARE_GITHUB_OWNER", "TaterTotterson")
+FIRMWARE_GITHUB_OWNER = os.environ.get("FIRMWARE_GITHUB_OWNER", "Gabriel-Lewis")
 FIRMWARE_GITHUB_REPO = os.environ.get("FIRMWARE_GITHUB_REPO", "microWakeWords")
 FIRMWARE_GITHUB_REF = os.environ.get("FIRMWARE_GITHUB_REF", "main")
 WAKE_SOUND_CATALOG_CACHE_TTL_SECONDS = int(os.environ.get("WAKE_SOUND_CATALOG_CACHE_TTL_SECONDS", "600"))
@@ -1273,6 +1273,36 @@ def _wake_sound_label_from_slug(slug: str) -> str:
     return re.sub(r"[_\-.]+", " ", text).strip().title() or "Wake Sound"
 
 
+def _normalize_firmware_repo_url(url: str) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"}:
+        return text
+    if parsed.netloc != "raw.githubusercontent.com":
+        return text
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 4:
+        return text
+    owner, repo = parts[0], parts[1]
+    if owner != "TaterTotterson" or repo != FIRMWARE_GITHUB_REPO:
+        return text
+    rel_path = "/".join(parts[3:])
+    if rel_path.startswith("wakeSounds/"):
+        return f"https://raw.githubusercontent.com/esphome/home-assistant-voice-pe/dev/sounds/{Path(rel_path).name}"
+    return _firmware_raw_url(rel_path)
+
+
+def _normalize_firmware_profile_value(key: str, value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if key == "wake_sound_catalog" or key.endswith("_sound_file"):
+        return _normalize_firmware_repo_url(text)
+    return text
+
+
 def _wake_sound_entries_from_manifest(payload: Any) -> List[Dict[str, str]]:
     rows: List[Any] = []
     if isinstance(payload, list):
@@ -1301,6 +1331,8 @@ def _wake_sound_entries_from_manifest(payload: Any) -> List[Dict[str, str]]:
         path = str(row.get("path") or "").strip()
         if not url and path:
             url = _firmware_raw_url(path)
+        else:
+            url = _normalize_firmware_repo_url(url)
         if not url or url in seen:
             continue
         seen.add(url)
@@ -1503,7 +1535,7 @@ def _firmware_profile_values_for_template(profile: Dict[str, Any], substitutions
     keep_keys = {str(key or "").strip() for key in substitutions.keys()}
     keep_keys.update({"__target_host", "__target_port", "wake_sound_catalog", "wake_word_choice"})
     return {
-        key: str(profile.get(key) or "")
+        key: _normalize_firmware_profile_value(key, profile.get(key))
         for key in keep_keys
         if key and key in profile
     }
@@ -1549,18 +1581,21 @@ def _normalize_firmware_profile_update(template_key: str, values: Dict[str, Any]
                 normalized[key_text] = ""
             continue
         if key_text in values:
-            normalized[key_text] = str(values.get(key_text) or "").strip()
+            normalized[key_text] = _normalize_firmware_profile_value(key_text, values.get(key_text))
         elif key_text not in normalized:
-            normalized[key_text] = default
+            normalized[key_text] = _normalize_firmware_profile_value(key_text, default)
 
     wake_word_choice = str(values.get("wake_word_choice") or "").strip()
     if wake_word_choice:
         normalized["wake_word_choice"] = wake_word_choice
     wake_sound_choice = str(values.get("wake_sound_catalog") or "").strip()
     if wake_sound_choice:
-        normalized["wake_sound_catalog"] = wake_sound_choice
+        normalized["wake_sound_catalog"] = _normalize_firmware_profile_value("wake_sound_catalog", wake_sound_choice)
         if wake_sound_choice != "__custom__" and "wake_word_triggered_sound_file" in substitutions:
-            normalized["wake_word_triggered_sound_file"] = wake_sound_choice
+            normalized["wake_word_triggered_sound_file"] = _normalize_firmware_profile_value(
+                "wake_word_triggered_sound_file",
+                wake_sound_choice,
+            )
 
     target_host = str(values.get("__target_host") or "").strip()
     target_port = str(values.get("__target_port") or "").strip()
@@ -1668,8 +1703,11 @@ def _firmware_template_fields(template_key: str, base_url: str = "", profile_key
 
         if key_text == "wake_word_triggered_sound_file" and not wake_sound_picker_added:
             wake_sound_entries = wake_sound_catalog.get("entries") if isinstance(wake_sound_catalog.get("entries"), list) else []
-            current_sound_url = str(profile.get(key_text) or _template_default_string(raw_value) or "").strip()
-            saved_sound_choice = str(profile.get("wake_sound_catalog") or "").strip()
+            current_sound_url = _normalize_firmware_profile_value(
+                key_text,
+                profile.get(key_text) or _template_default_string(raw_value),
+            )
+            saved_sound_choice = _normalize_firmware_profile_value("wake_sound_catalog", profile.get("wake_sound_catalog"))
             available_sound_urls = {str(row.get("value") or "") for row in wake_sound_entries if isinstance(row, dict)}
             if saved_sound_choice in available_sound_urls or saved_sound_choice == "__custom__":
                 picker_value = saved_sound_choice
@@ -1696,7 +1734,7 @@ def _firmware_template_fields(template_key: str, base_url: str = "", profile_key
             wake_sound_picker_added = True
 
         default = _template_default_string(raw_value)
-        saved = str(profile.get(key_text) or "")
+        saved = _normalize_firmware_profile_value(key_text, profile.get(key_text))
         field_type = "text"
         read_only = key_text in fixed_keys
         value = default if read_only else (saved or default)
@@ -1802,12 +1840,18 @@ def _render_firmware_config(
         elif key_text == "wake_word_model_url":
             normalized[key_text] = _local_trained_wake_word_url(raw_value)
         else:
-            normalized[key_text] = str(raw_value if raw_value is not None else "").strip() or _template_default_string(
-                substitutions.get(key_text)
+            normalized[key_text] = _normalize_firmware_profile_value(
+                key_text,
+                str(raw_value if raw_value is not None else "").strip() or _template_default_string(
+                    substitutions.get(key_text)
+                ),
             )
     wake_sound_choice = str(values.get("wake_sound_catalog") or "").strip()
     if wake_sound_choice and wake_sound_choice != "__custom__" and "wake_word_triggered_sound_file" in substitutions:
-        normalized["wake_word_triggered_sound_file"] = wake_sound_choice
+        normalized["wake_word_triggered_sound_file"] = _normalize_firmware_profile_value(
+            "wake_word_triggered_sound_file",
+            wake_sound_choice,
+        )
 
     missing = []
     if not normalized.get("wifi_ssid"):

@@ -59,7 +59,7 @@ If you change `REC_PORT`, use that same port in the ESPHome `Trainer App URL`.
 
 ## Captured Audio Workflow
 
-To collect samples from a sat, flash it with the ESPHome firmware from [microWakeWords](https://github.com/TaterTotterson/microWakeWords). The `Firmware` tab can build and flash the VoicePE or Satellite1 YAMLs directly from that repo.
+To collect samples from a sat, flash it with the ESPHome firmware from [microWakeWords](https://github.com/Gabriel-Lewis/microWakeWords). The `Firmware` tab can build and flash the VoicePE or Satellite1 YAMLs directly from that repo.
 
 After flashing, the device exposes ESPHome entities for capture setup:
 
@@ -170,7 +170,7 @@ Piper voices, generated samples, and feature caches are also reused when the sel
 
 The `Firmware` tab builds and flashes ESPHome firmware for supported sats.
 
-- Downloads the latest firmware YAML templates from the [microWakeWords](https://github.com/TaterTotterson/microWakeWords) repo on GitHub.
+- Downloads the latest firmware YAML templates from the [microWakeWords](https://github.com/Gabriel-Lewis/microWakeWords) repo on GitHub.
 - Lets you choose `VoicePE` or `Satellite1`.
 - Auto-detects ESPHome devices with mDNS when available.
 - Allows manual IP or hostname entry if discovery does not find the device.
