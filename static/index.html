@@ -2457,7 +2457,13 @@
     const template = selectedFirmwareTemplate();
     const fields = Array.isArray(template?.fields) ? template.fields : [];
     if (!fields.length) {
-      $("firmwareFields").innerHTML = `<div class="emptyState">No editable settings were found for this firmware template. You can continue with the selected template and target device.</div>`;
+      const warnings = (uiState.firmware.templates || [])
+        .filter((item) => Array.isArray(item.warnings) && item.warnings.length)
+        .flatMap((item) => item.warnings);
+      const message = warnings.length
+        ? `Could not load firmware settings: ${warnings.map(escapeHtml).join(" ")}`
+        : "No editable settings were found for this firmware template. You can continue with the selected template and target device.";
+      $("firmwareFields").innerHTML = `<div class="emptyState">${message}</div>`;
       return;
     }
 
@@ -2489,7 +2495,6 @@
       </section>
     `).join("");
     syncRenderedWakeWordSelection();
-    syncRenderedWakeSoundSelection();
   }
 
   function renderFirmwareField(field) {
@@ -2529,28 +2534,6 @@
           <select data-firmware-field="${escapeAttr(key)}" data-wake-word-select ${options.length ? "" : "disabled"}>
             <option value="">${escapeHtml(placeholder || "Choose a trained wake word...")}</option>
             ${optionHtml}
-          </select>
-          ${description}
-        </label>
-      `;
-    }
-    if (type === "wake_sound_select") {
-      const optionHtml = options.length
-        ? options.map((option) => {
-            const optionValue = String(option.value || "");
-            const selected = optionValue && optionValue === String(value || "") ? " selected" : "";
-            return `
-              <option value="${escapeAttr(optionValue)}"${selected}>
-                ${escapeHtml(option.label || optionValue)}
-              </option>
-            `;
-          }).join("")
-        : "";
-      return `
-        <label class="field">
-          <strong>${escapeHtml(label)}</strong>
-          <select data-firmware-field="${escapeAttr(key)}" data-wake-sound-select ${options.length ? "" : "disabled"}>
-            ${optionHtml || `<option value="__custom__">Custom URL</option>`}
           </select>
           ${description}
         </label>
@@ -2613,35 +2596,6 @@
     syncButtons();
   }
 
-  function syncRenderedWakeSoundSelection({ fromPicker = false } = {}) {
-    const select = document.querySelector("select[data-wake-sound-select]");
-    const urlInput = document.querySelector('[data-firmware-field="wake_word_triggered_sound_file"]');
-    if (!(select instanceof HTMLSelectElement) || !(urlInput instanceof HTMLInputElement)) return;
-    if (fromPicker) {
-      const selectedUrl = String(select.value || "").trim();
-      if (selectedUrl && selectedUrl !== "__custom__") {
-        urlInput.value = selectedUrl;
-      }
-      return;
-    }
-    const currentUrl = String(urlInput.value || "").trim();
-    const optionValues = Array.from(select.options).map((option) => String(option.value || "").trim());
-    if (currentUrl && optionValues.includes(currentUrl)) {
-      select.value = currentUrl;
-    } else if (optionValues.includes("__custom__")) {
-      select.value = "__custom__";
-    }
-  }
-
-  function applyWakeSoundSelection(select, options = {}) {
-    syncRenderedWakeSoundSelection({ fromPicker: true });
-    if (!options.silent) {
-      setPill($("firmwareStatus"), "Wake sound selected", "ok");
-      scheduleFirmwareProfileSave();
-    }
-    syncButtons();
-  }
-
   function resetWakeSoundPreview(message = "") {
     if (wakeSoundPreviewAudio instanceof HTMLAudioElement) {
       try {
@@ -2666,11 +2620,7 @@
 
   function getWakeSoundPreviewUrl() {
     const urlInput = document.querySelector('[data-firmware-field="wake_word_triggered_sound_file"]');
-    const picker = document.querySelector("select[data-wake-sound-select]");
-    const urlValue = String(urlInput instanceof HTMLInputElement ? urlInput.value || "" : "").trim();
-    if (urlValue) return urlValue;
-    const pickerValue = String(picker instanceof HTMLSelectElement ? picker.value || "" : "").trim();
-    return pickerValue && pickerValue !== "__custom__" ? pickerValue : "";
+    return String(urlInput instanceof HTMLInputElement ? urlInput.value || "" : "").trim();
   }
 
   async function handleWakeSoundPreview(button) {
@@ -2752,10 +2702,6 @@
         values[key] = field.value || "";
       }
     });
-    const wakeSoundChoice = String(values.wake_sound_catalog || "").trim();
-    if (wakeSoundChoice && wakeSoundChoice !== "__custom__") {
-      values.wake_word_triggered_sound_file = wakeSoundChoice;
-    }
     return values;
   }
 
@@ -2834,11 +2780,6 @@
       alert("Enter the device IP or hostname first.");
       return;
     }
-    const wakeSoundSelect = document.querySelector("select[data-wake-sound-select]");
-    if (wakeSoundSelect instanceof HTMLSelectElement) {
-      syncRenderedWakeSoundSelection({ fromPicker: true });
-    }
-
     const ok = confirm(`Build and flash ${template.label || template.value} firmware to ${host}:${port || "3232"}?\n\nMake sure this is the correct device before continuing.`);
     if (!ok) return;
 
@@ -3427,7 +3368,6 @@
   $("firmwareFields").addEventListener("input", (event) => {
     if (event.target?.matches?.('[data-firmware-field="wake_word_triggered_sound_file"]')) {
       resetWakeSoundPreview();
-      syncRenderedWakeSoundSelection();
     }
     syncButtons();
     scheduleFirmwareProfileSave();
@@ -3446,12 +3386,6 @@
     const select = event.target.closest("select[data-wake-word-select]");
     if (select) {
       applyWakeWordSelection(select);
-      return;
-    }
-    const wakeSoundSelect = event.target.closest("select[data-wake-sound-select]");
-    if (wakeSoundSelect) {
-      resetWakeSoundPreview();
-      applyWakeSoundSelection(wakeSoundSelect);
       return;
     }
     syncButtons();
