@@ -234,9 +234,16 @@ PY
 
 # microWakeWord (editable install from local clone in deps/)
 mkdir -p deps
+if [[ -d "deps/micro-wake-word/.git" ]]; then
+  current_url="$(git -C deps/micro-wake-word remote get-url origin 2>/dev/null || true)"
+  if [[ "$current_url" == *"TaterTotterson/micro-wake-word"* ]]; then
+    echo "🔁 Repointing microWakeWord remote to Gabriel-Lewis fork…"
+    git -C deps/micro-wake-word remote set-url origin https://github.com/Gabriel-Lewis/micro-wake-word.git
+  fi
+fi
 if [[ ! -d "deps/micro-wake-word" ]]; then
   echo "⬇️ Cloning microWakeWord…"
-  git clone https://github.com/TaterTotterson/micro-wake-word.git deps/micro-wake-word >/dev/null
+  git clone https://github.com/Gabriel-Lewis/micro-wake-word.git deps/micro-wake-word >/dev/null
 else
   echo "🔁 Updating microWakeWord…"
   (git -C deps/micro-wake-word pull --ff-only origin main || true)

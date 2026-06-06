@@ -14,7 +14,7 @@
 # - MW_GITHUB_TOKEN in env (PAT; needs issues + contents on the target repo)
 #
 # Optional env:
-# - MW_ISSUE_REPO (default: TaterTotterson/microWakeWords)
+# - MW_ISSUE_REPO (default: Gabriel-Lewis/microWakeWords)
 # - MW_MODEL_REPO (default: MW_ISSUE_REPO)
 # - MW_MODEL_BRANCH (default: main)
 # - MW_MODEL_BASE_PATH (default: microWakeWordsV3)
@@ -56,7 +56,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # -------------------- Config --------------------
 : "${MW_GITHUB_TOKEN:?MW_GITHUB_TOKEN is required}"
 
-MW_ISSUE_REPO="${MW_ISSUE_REPO:-TaterTotterson/microWakeWords}"
+MW_ISSUE_REPO="${MW_ISSUE_REPO:-Gabriel-Lewis/microWakeWords}"
 MW_MODEL_REPO="${MW_MODEL_REPO:-$MW_ISSUE_REPO}"
 MW_MODEL_BRANCH="${MW_MODEL_BRANCH:-main}"
 MW_MODEL_BASE_PATH="${MW_MODEL_BASE_PATH:-microWakeWordsV3}"
