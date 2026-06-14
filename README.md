@@ -11,7 +11,7 @@ Real samples come from device-captured wake audio, close misses, or manual uploa
 - `Trainer` starts a wake-word session, shows positive/negative sample counts, and launches training.
 - `Captured Audio` reviews clips sent by ESPHome sats, including wake hits, close misses, and false wakes.
 - `Samples` plays, removes, clears, and manually imports personal or negative samples.
-- `Firmware` builds the latest `microWakeWords` ESPHome YAMLs from GitHub and flashes VoicePE or Satellite1 over OTA.
+- `Firmware` builds bundled `microWakeWords` ESPHome YAMLs and flashes supported sats over OTA.
 - Popup consoles show colorized training and firmware logs while long-running jobs are active.
 
 ---
@@ -59,7 +59,7 @@ If you change `REC_PORT`, use that same port in the ESPHome `Trainer App URL`.
 
 ## Captured Audio Workflow
 
-To collect samples from a sat, flash it with the ESPHome firmware from [microWakeWords](https://github.com/Gabriel-Lewis/microWakeWords). The `Firmware` tab can build and flash the VoicePE or Satellite1 YAMLs directly from that repo.
+To collect samples from a sat, flash it with the bundled ESPHome firmware under `firmware/microWakeWords/`. The `Firmware` tab can build and flash the supported device YAMLs directly from this repo.
 
 After flashing, the device exposes ESPHome entities for capture setup:
 
@@ -170,8 +170,8 @@ Piper voices, generated samples, and feature caches are also reused when the sel
 
 The `Firmware` tab builds and flashes ESPHome firmware for supported sats.
 
-- Downloads the latest firmware YAML templates from the [microWakeWords](https://github.com/Gabriel-Lewis/microWakeWords) repo on GitHub.
-- Lets you choose `VoicePE` or `Satellite1`.
+- Uses bundled firmware YAML templates from `firmware/microWakeWords/`.
+- Lets you choose `VoicePE`, `Satellite1`, `Koala`, `ReSpeaker Lite`, or `ReSpeaker XVF3800`.
 - Auto-detects ESPHome devices with mDNS when available.
 - Allows manual IP or hostname entry if discovery does not find the device.
 - Saves firmware form values so you do not re-enter sounds and URLs every run.
@@ -179,7 +179,7 @@ The `Firmware` tab builds and flashes ESPHome firmware for supported sats.
 - Builds with ESPHome and flashes OTA.
 - Streams ESPHome output in a colorized firmware console.
 
-Firmware YAMLs are intentionally pulled from GitHub each time. There is no local fallback path in the trainer UI.
+Firmware YAMLs are bundled by default. Set `FIRMWARE_TEMPLATE_SOURCE=github` if you intentionally want to load templates from GitHub instead.
 
 ---
 

@@ -1,0 +1,558 @@
+voice_kit:
+  id: voice_kit_component
+  i2c_id: internal_i2c
+  reset_pin: GPIO4
+  firmware:
+    url: https://raw.githubusercontent.com/Gabriel-Lewis/microWakeWords/main/voicepe/firmware/xmos/ffva_v1.3.2-vod_upgrade.bin
+    version: "1.3.2"
+    md5: 12b6287a9a5b12261e9266ea348e0d90
+    on_begin:
+      then:
+        - lambda: |-
+            id(xmos_flashing_state) = 1;
+            id(global_led_animation_index) = 0;
+        - script.execute: control_leds
+    on_progress:
+      then:
+        - lambda: |-
+            int progress_led = (int) (x * 12.0f / 100.0f);
+            if (progress_led < 0) {
+              progress_led = 0;
+            } else if (progress_led > 11) {
+              progress_led = 11;
+            }
+            id(global_led_animation_index) = progress_led;
+        - script.execute: control_leds
+    on_end:
+      then:
+        - lambda: id(xmos_flashing_state) = 2;
+        - script.execute: control_leds
+        - lambda: id(xmos_flashing_state) = 0;
+    on_error:
+      then:
+        - lambda: id(xmos_flashing_state) = 3;
+        - script.execute: control_leds
+        - lambda: id(xmos_flashing_state) = 0;
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/Gabriel-Lewis/microWakeWords
+      ref: main
+      path: voicepe/components
+    components:
+      - i2s_audio
+      - voicepe_doa
+    refresh: 1h
+  - source:
+      type: git
+      url: https://github.com/Gabriel-Lewis/microWakeWords
+      ref: main
+      path: shared/components
+    components:
+      - http_request
+      - voice_assistant
+      - micro_wake_word
+      - remote_wake_word
+      - voice_kit
+    refresh: 1h
+
+audio_dac:
+  - platform: aic3204
+    id: aic3204_dac
+    i2c_id: internal_i2c
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: i2s_mics
+    channels: 1
+    gain_factor: 4
+  stop_after_detection: false
+  models:
+    - model: ${wake_word_model_url}
+      id: ${wake_word_name}
+    - model: https://github.com/kahrendt/microWakeWord/releases/download/stop/stop.json
+      id: stop
+      internal: true
+  vad:
+  on_wake_word_detected:
+    # If the wake word is detected when the device is muted (Possible with the software mute switch): Do nothing
+    - if:
+        condition:
+          switch.is_off: master_mute_switch
+        then:
+          # If a timer is ringing: Stop it, do not start the voice assistant (We can stop timer from voice!)
+          - if:
+              condition:
+                switch.is_on: timer_ringing
+              then:
+                - switch.turn_off: timer_ringing
+              # Stop voice assistant if running
+              else:
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      voice_assistant.stop:
+                    # Stop any other media player announcement
+                    else:
+                      - if:
+                          condition:
+                            media_player.is_announcing:
+                              id: external_media_player
+                          then:
+                            - media_player.stop:
+                                announcement: true
+                                id: external_media_player
+                          # Start the voice assistant and play the wake sound, if enabled
+                          else:
+                            - lambda: |-
+                                id(openwakeword_wake_detected) = true;
+                                id(voice_assistant_phase) = 2;
+                            - script.execute: control_leds
+                            - if:
+                                condition:
+                                  switch.is_on: wake_sound
+                                then:
+                                  - script.execute:
+                                      id: play_sound
+                                      priority: false
+                                      sound_file: "wake_word_triggered_sound"
+                            - voice_assistant.start:
+                                wake_word: !lambda return wake_word;
+
+remote_wake_word:
+  id: oww
+  microphone:
+    microphone: i2s_mics
+    channels: 1
+    gain_factor: 4
+  url: ${openwakeword_server_url}
+  stream_path: /api/openwakeword/stream
+  source_device: ${device_name}
+  wake_word: ${wake_word_name}
+  chunk_duration_ms: 500
+  max_failures: ${openwakeword_max_failures}
+  http_timeout_ms: ${openwakeword_http_timeout_ms}
+  on_wake_word_detected:
+    - logger.log:
+        level: INFO
+        tag: voice
+        format: "Remote wake word detected: %s"
+        args: [ 'wake_word.c_str()' ]
+    - if:
+        condition:
+          switch.is_off: master_mute_switch
+        then:
+          - if:
+              condition:
+                switch.is_on: timer_ringing
+              then:
+                - switch.turn_off: timer_ringing
+              else:
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      - voice_assistant.stop:
+                    else:
+                      - lambda: |-
+                          id(openwakeword_wake_detected) = true;
+                          id(voice_assistant_phase) = 2;
+                      - script.execute: control_leds
+                      - if:
+                          condition:
+                            media_player.is_announcing:
+                              id: external_media_player
+                          then:
+                            - media_player.stop:
+                                announcement: true
+                                id: external_media_player
+                      - if:
+                          condition:
+                            switch.is_on: wake_sound
+                          then:
+                            - script.execute:
+                                id: play_sound
+                                priority: false
+                                sound_file: "wake_word_triggered_sound"
+                      - voice_assistant.start:
+                          wake_word: !lambda return wake_word;
+  on_error:
+    - logger.log:
+        level: WARN
+        tag: voice
+        format: "Remote wake word unavailable, temporarily using microWakeWord: %s"
+        args: [ 'message.c_str()' ]
+    - script.execute: recover_openwakeword_after_fallback
+
+switch:
+  - platform: template
+    id: capture_wake_audio
+    name: Capture Wake Audio
+    icon: "mdi:waveform"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: id(mww).set_capture_upload_enabled(true);
+    turn_off_action:
+      - lambda: id(mww).set_capture_upload_enabled(false);
+
+  - platform: template
+    id: capture_close_misses
+    name: Capture Close Misses
+    icon: "mdi:target"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: id(mww).set_capture_close_misses_enabled(true);
+    turn_off_action:
+      - lambda: id(mww).set_capture_close_misses_enabled(false);
+
+text:
+  - platform: template
+    id: trainer_app_url
+    name: Trainer App URL
+    icon: "mdi:lan-connect"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "http://trainer.local:8789"
+    mode: TEXT
+    max_length: 255
+    set_action:
+      - lambda: id(mww).set_capture_upload_url(x);
+
+  - platform: template
+    id: microwakeword_model_url
+    name: microWakeWord Model URL
+    icon: "mdi:file-cloud"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "${wake_word_model_url}"
+    mode: TEXT
+    max_length: 255
+    set_action:
+      - lambda: id(mww).set_runtime_model_url(x);
+
+  - platform: template
+    id: openwakeword_server_url
+    name: openWakeWord Server URL
+    icon: "mdi:server-network"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "${openwakeword_server_url}"
+    mode: TEXT
+    max_length: 255
+    set_action:
+      - lambda: |-
+          if (id(wake_engine_select).current_option() == "openwakeword") {
+            id(oww).set_url(x);
+          }
+
+  - platform: template
+    id: nanowakeword_server_url
+    name: NanoWakeWord Server URL
+    icon: "mdi:server-network"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "${nanowakeword_server_url}"
+    mode: TEXT
+    max_length: 255
+    set_action:
+      - lambda: |-
+          if (id(wake_engine_select).current_option() == "nanowakeword") {
+            id(oww).set_url(x);
+          }
+
+select:
+  - platform: template
+    name: "Wake Engine"
+    id: wake_engine_select
+    icon: "mdi:ear-hearing"
+    entity_category: config
+    optimistic: true
+    initial_option: ${wake_engine}
+    restore_value: true
+    options:
+      - microwakeword
+      - openwakeword
+      - nanowakeword
+    on_value:
+      - script.execute: apply_wake_engine
+
+  - platform: template
+    name: "Wake word sensitivity"
+    id: wake_word_sensitivity
+    optimistic: true
+    initial_option: Slightly sensitive
+    restore_value: true
+    entity_category: config
+    options:
+      - Slightly sensitive
+      - Moderately sensitive
+      - Very sensitive
+    on_value:
+      # Sets specific wake word probabilities computed for each particular model
+      # Note probability cutoffs are set as a quantized uint8 value, each comment has the corresponding floating point cutoff
+      # False Accepts per Hour values are tested against all units and channels from the Dinner Party Corpus.
+      # These cutoffs apply only to the specific models included in the firmware: okay_nabu@20241226.3, hey_jarvis@v2, hey_mycroft@v2
+      lambda: |-
+        if (x == "Slightly sensitive") {
+          id(${wake_word_name}).set_probability_cutoff(${wake_cutoff_slight});
+        } else if (x == "Moderately sensitive") {
+          id(${wake_word_name}).set_probability_cutoff(${wake_cutoff_moderate});
+        } else if (x == "Very sensitive") {
+          id(${wake_word_name}).set_probability_cutoff(${wake_cutoff_very});
+        }
+
+number:
+  - platform: template
+    id: close_miss_threshold
+    name: Close Miss Threshold
+    icon: "mdi:target-variant"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: 0.78
+    min_value: 0.50
+    max_value: 0.95
+    step: 0.01
+    set_action:
+      - lambda: id(mww).set_capture_close_miss_probability_cutoff(x);
+
+  - platform: template
+    id: openwakeword_http_timeout_ms
+    name: Remote Wake Transport Timeout
+    icon: "mdi:timer-outline"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: ${openwakeword_http_timeout_ms}
+    min_value: 250
+    max_value: 10000
+    step: 50
+    unit_of_measurement: ms
+    set_action:
+      - lambda: id(oww).set_http_timeout_ms((uint32_t) x);
+
+  - platform: template
+    id: openwakeword_max_failures
+    name: Remote Wake Max Failures
+    icon: "mdi:alert-circle-outline"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: ${openwakeword_max_failures}
+    min_value: 1
+    max_value: 20
+    step: 1
+    set_action:
+      - lambda: id(oww).set_max_failures((uint8_t) x);
+
+voice_assistant:
+  id: va
+  microphone:
+    microphone: i2s_mics
+    channels: 0
+  media_player: external_media_player
+  micro_wake_word: mww
+  use_wake_word: false
+  noise_suppression_level: 0
+  auto_gain: 0 dbfs
+  volume_multiplier: 1
+  on_client_connected:
+    - lambda: |-
+        id(init_in_progress) = false;
+        id(openwakeword_wake_detected) = false;
+    - lambda: |-
+        id(mww).set_capture_upload_enabled(id(capture_wake_audio).state);
+        id(mww).set_capture_close_misses_enabled(id(capture_close_misses).state);
+        id(mww).set_capture_close_miss_probability_cutoff(id(close_miss_threshold).state);
+        id(mww).set_capture_upload_url(id(trainer_app_url).state);
+        if (id(wake_engine_select).current_option() == "nanowakeword") {
+          id(oww).set_url(id(nanowakeword_server_url).state);
+          id(oww).set_stream_path("/api/nanowakeword/stream");
+        } else {
+          id(oww).set_url(id(openwakeword_server_url).state);
+          id(oww).set_stream_path("/api/openwakeword/stream");
+        }
+    - script.execute: apply_wake_engine
+    - lambda: id(voice_assistant_phase) = 1;
+    - script.execute: control_leds
+  on_client_disconnected:
+    - voice_assistant.stop:
+    - remote_wake_word.stop:
+    - lambda: |-
+        id(openwakeword_wake_detected) = false;
+        id(voice_assistant_phase) = 10;
+    - script.execute: control_leds
+  on_error:
+    - lambda: |-
+        id(openwakeword_wake_detected) = false;
+        id(push_to_intercom_active) = false;
+        id(push_to_intercom_handoff) = false;
+    - if:
+        condition:
+          or:
+            - lambda: return code == "duplicate_wake_up_detected";
+            - lambda: return code == "stt-no-text-recognized";
+        then:
+          - if:
+              condition:
+                voice_assistant.is_running:
+              then:
+                - voice_assistant.stop:
+          - lambda: id(voice_assistant_phase) = 1;
+          - script.execute: control_leds
+    # Only set the error phase if the error code is different than duplicate_wake_up_detected or stt-no-text-recognized
+    # These two are ignored for a better user experience
+    - if:
+        condition:
+          and:
+            - lambda: return !id(init_in_progress);
+            - lambda: return code != "duplicate_wake_up_detected";
+            - lambda: return code != "stt-no-text-recognized";
+        then:
+          - lambda: id(voice_assistant_phase) = 11;
+          - script.execute: control_leds
+    # If the error code is cloud-auth-failed, serve a local audio file guiding the user.
+    - if:
+        condition:
+          - lambda: return code == "cloud-auth-failed";
+        then:
+          - script.execute:
+              id: play_sound
+              priority: true
+              sound_file: "error_cloud_expired"
+  on_wake_word_detected:
+    - if:
+        condition:
+          lambda: return id(wake_engine_select).current_option() != "microwakeword";
+        then:
+          - lambda: |-
+              id(openwakeword_wake_detected) = true;
+              id(voice_assistant_phase) = 2;
+          - script.execute: control_leds
+          - if:
+              condition:
+                and:
+                  - switch.is_off: master_mute_switch
+                  - switch.is_off: timer_ringing
+                  - switch.is_on: wake_sound
+              then:
+                - script.execute:
+                    id: play_sound
+                    priority: false
+                    sound_file: "wake_word_triggered_sound"
+  # When the voice assistant starts: Play a wake up sound, duck audio.
+  on_start:
+    - remote_wake_word.stop:
+    - mixer_speaker.apply_ducking:
+        id: media_mixing_input
+        decibel_reduction: 20  # Number of dB quieter; higher implies more quiet, 0 implies full volume
+        duration: 0.0s         # The duration of the transition (default is no transition)
+    - micro_wake_word.disable_model: ${wake_word_name}
+  on_listening:
+    - if:
+        condition:
+          lambda: return id(wake_engine_select).current_option() == "microwakeword" || id(openwakeword_wake_detected) || id(push_to_intercom_active);
+        then:
+          - lambda: id(voice_assistant_phase) = 2;
+        else:
+          - lambda: id(voice_assistant_phase) = 1;
+    - script.execute: control_leds
+  on_stt_vad_start:
+    - if:
+        condition:
+          lambda: return id(wake_engine_select).current_option() == "microwakeword" || id(openwakeword_wake_detected) || id(push_to_intercom_active);
+        then:
+          - lambda: id(voice_assistant_phase) = 3;
+          - script.execute: control_leds
+  on_stt_vad_end:
+    - if:
+        condition:
+          lambda: return id(wake_engine_select).current_option() == "microwakeword" || id(openwakeword_wake_detected) || id(push_to_intercom_active);
+        then:
+          - lambda: id(voice_assistant_phase) = 4;
+          - script.execute: control_leds
+  on_tool_call_start:
+    - if:
+        condition:
+          lambda: return id(wake_engine_select).current_option() == "microwakeword" || id(openwakeword_wake_detected) || id(push_to_intercom_active);
+        then:
+          - lambda: id(voice_assistant_phase) = 6;
+          - script.execute: control_leds
+  on_intent_progress:
+    - if:
+        condition:
+          and:
+            # A nonempty x variable means a streaming TTS url was sent to the media player
+            - lambda: 'return !x.empty();'
+            - lambda: return id(wake_engine_select).current_option() == "microwakeword" || id(openwakeword_wake_detected) || id(push_to_intercom_active);
+        then:
+          - lambda: id(voice_assistant_phase) = 5;
+          - script.execute: control_leds
+          # Start a script that would potentially enable the stop word if the response is longer than a second
+          - script.execute: activate_stop_word_once
+  on_tts_start:
+    - if:
+        condition:
+          and:
+            # The intent_progress trigger didn't start the TTS Reponse
+            - lambda: 'return id(voice_assistant_phase) != 5;'
+            - lambda: return id(wake_engine_select).current_option() == "microwakeword" || id(openwakeword_wake_detected) || id(push_to_intercom_active);
+        then:
+          - lambda: id(voice_assistant_phase) = 5;
+          - script.execute: control_leds
+          # Start a script that would potentially enable the stop word if the response is longer than a second
+          - script.execute: activate_stop_word_once
+  # When the voice assistant ends ...
+  on_end:
+    - wait_until:
+        not:
+          voice_assistant.is_running:
+    - if:
+        condition:
+          lambda: return id(push_to_intercom_handoff);
+        then:
+          - lambda: id(push_to_intercom_handoff) = false;
+        else:
+          - lambda: id(push_to_intercom_active) = false;
+    - lambda: id(openwakeword_wake_detected) = false;
+    # Stop ducking audio.
+    - mixer_speaker.apply_ducking:
+        id: media_mixing_input
+        decibel_reduction: 0
+        duration: 1.0s
+    # Disable the stop word if the timer is not ringing, and re-enable the normal wake path.
+    - if:
+        condition:
+          lambda: return !id(push_to_intercom_active);
+        then:
+          - script.execute: apply_wake_engine
+    # If the end happened because of an error, let the error phase on for a second
+    - if:
+        condition:
+          lambda: return id(voice_assistant_phase) == 11;
+        then:
+          - delay: 1s
+    # Reset the voice assistant phase id and reset the LED animations.
+    - lambda: id(voice_assistant_phase) = 1;
+    - script.execute: control_leds
+  on_timer_finished:
+    - switch.turn_on: timer_ringing
+  on_timer_started:
+    - script.execute: control_leds
+  on_timer_cancelled:
+    - script.execute: control_leds
+  on_timer_updated:
+    - script.execute: control_leds
+  on_timer_tick:
+    - script.execute: control_leds

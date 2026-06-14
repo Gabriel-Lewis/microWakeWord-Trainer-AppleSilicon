@@ -72,6 +72,10 @@ FIRMWARE_MAX_LOG_LINES = int(os.environ.get("FIRMWARE_MAX_LOG_LINES", "500"))
 FIRMWARE_GITHUB_OWNER = os.environ.get("FIRMWARE_GITHUB_OWNER", "Gabriel-Lewis")
 FIRMWARE_GITHUB_REPO = os.environ.get("FIRMWARE_GITHUB_REPO", "microWakeWords")
 FIRMWARE_GITHUB_REF = os.environ.get("FIRMWARE_GITHUB_REF", "main")
+FIRMWARE_LOCAL_REPO_DIR = Path(
+    os.environ.get("FIRMWARE_LOCAL_REPO_DIR", str(ROOT_DIR / "firmware" / "microWakeWords"))
+).expanduser().resolve()
+FIRMWARE_TEMPLATE_SOURCE = os.environ.get("FIRMWARE_TEMPLATE_SOURCE", "local").strip().lower() or "local"
 FIRMWARE_PLATFORMIO_DIR = FIRMWARE_CACHE_DIR / "platformio"
 FIRMWARE_HOME_DIR = FIRMWARE_CACHE_DIR / "home"
 FIRMWARE_XDG_CACHE_DIR = FIRMWARE_CACHE_DIR / "cache"
@@ -86,7 +90,7 @@ FIRMWARE_TEMPLATE_SPECS = (
         "path": "voicePE.yaml",
         "identity_key": "device_name",
         "friendly_key": "friendly_name",
-        "fixed_keys": {"device_name"},
+        "fixed_keys": {"device_name", "firmware_version"},
         "auto_keys": {"ha_voice_ip"},
     },
     {
@@ -95,7 +99,34 @@ FIRMWARE_TEMPLATE_SPECS = (
         "path": "satellite1.yaml",
         "identity_key": "node_name",
         "friendly_key": "friendly_name",
-        "fixed_keys": {"node_name"},
+        "fixed_keys": {"node_name", "esp32_fw_version", "xmos_fw_version"},
+        "auto_keys": {"ha_voice_ip"},
+    },
+    {
+        "key": "koala",
+        "label": "Koala",
+        "path": "koala.yaml",
+        "identity_key": "device_name",
+        "friendly_key": "friendly_name",
+        "fixed_keys": {"device_name", "firmware_version"},
+        "auto_keys": {"ha_voice_ip"},
+    },
+    {
+        "key": "respeaker_lite",
+        "label": "ReSpeaker Lite",
+        "path": "respeakerLite.yaml",
+        "identity_key": "device_name",
+        "friendly_key": "friendly_name",
+        "fixed_keys": {"device_name", "firmware_version"},
+        "auto_keys": {"ha_voice_ip"},
+    },
+    {
+        "key": "respeaker_xvf3800",
+        "label": "ReSpeaker XVF3800",
+        "path": "respeakerXVF3800.yaml",
+        "identity_key": "device_name",
+        "friendly_key": "friendly_name",
+        "fixed_keys": {"device_name", "firmware_version"},
         "auto_keys": {"ha_voice_ip"},
     },
 )
@@ -1246,6 +1277,22 @@ def _firmware_raw_url(path: str) -> str:
     return f"https://raw.githubusercontent.com/{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}/{FIRMWARE_GITHUB_REF}/{clean}"
 
 
+def _firmware_local_path(path: str) -> Path:
+    clean = str(path or "").strip().lstrip("/")
+    candidate = (FIRMWARE_LOCAL_REPO_DIR / clean).resolve()
+    try:
+        candidate.relative_to(FIRMWARE_LOCAL_REPO_DIR)
+    except ValueError as exc:
+        raise RuntimeError(f"Firmware path escapes bundled source: {path}") from exc
+    return candidate
+
+
+def _firmware_source_label(path: str) -> str:
+    if FIRMWARE_TEMPLATE_SOURCE == "github":
+        return _firmware_raw_url(path)
+    return str(_firmware_local_path(path))
+
+
 def _fetch_text_url(url: str, timeout: float = 20) -> str:
     req = URLRequest(url, headers={"User-Agent": "microWakeWord-Trainer/1.0"})
     with urlopen(req, timeout=timeout) as response:
@@ -1255,11 +1302,135 @@ def _fetch_text_url(url: str, timeout: float = 20) -> str:
 
 def _load_firmware_template_text(spec: Dict[str, Any]) -> tuple[str, str]:
     rel_path = str(spec.get("path") or "").strip()
+    if FIRMWARE_TEMPLATE_SOURCE != "github":
+        local_path = _firmware_local_path(rel_path)
+        if local_path.is_file():
+            return local_path.read_text(encoding="utf-8"), str(local_path)
+        raise RuntimeError(
+            f"Bundled firmware template not found: {local_path}. "
+            "Set FIRMWARE_TEMPLATE_SOURCE=github to load templates from GitHub."
+        )
+
     url = _firmware_raw_url(rel_path)
     try:
         return _fetch_text_url(url, timeout=20), url
     except Exception as exc:
         raise RuntimeError(f"Could not download firmware template from {url}: {exc}") from exc
+
+
+def _is_firmware_repo_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.netloc != "github.com":
+        return False
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return False
+    repo = parts[1].removesuffix(".git")
+    return repo == "microWakeWords" or repo == FIRMWARE_GITHUB_REPO
+
+
+def _firmware_raw_rel_path(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or parsed.netloc != "raw.githubusercontent.com":
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 4:
+        return ""
+    repo = parts[1]
+    if repo != "microWakeWords" and repo != FIRMWARE_GITHUB_REPO:
+        return ""
+    if len(parts) >= 6 and parts[2] == "refs" and parts[3] == "heads":
+        return "/".join(parts[5:])
+    return "/".join(parts[3:])
+
+
+def _localize_firmware_string(value: str) -> str:
+    text = value.replace(
+        "https://github.com/TaterTotterson/microWakeWords",
+        f"https://github.com/{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}",
+    )
+    text = text.replace(
+        "github://TaterTotterson/microWakeWords",
+        f"github://{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}",
+    )
+    text = text.replace(
+        "https://raw.githubusercontent.com/TaterTotterson/microWakeWords",
+        f"https://raw.githubusercontent.com/{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}",
+    )
+    if FIRMWARE_TEMPLATE_SOURCE == "github":
+        return text
+
+    rel_path = _firmware_raw_rel_path(text)
+    if rel_path:
+        local_path = _firmware_local_path(rel_path)
+        if local_path.is_file():
+            return str(local_path)
+    return text
+
+
+def _localize_firmware_external_component(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    localized = {
+        key: _normalize_firmware_template_repo_refs(child)
+        for key, child in item.items()
+    }
+    source = localized.get("source")
+    if isinstance(source, dict) and _is_firmware_repo_url(str(source.get("url") or "")):
+        path = str(source.get("path") or "esphome/components").strip()
+        localized.pop("refresh", None)
+        localized["source"] = {"type": "local", "path": str(_firmware_local_path(path))}
+    return localized
+
+
+def _localize_firmware_package_files(package: Dict[str, Any], package_dir: Path) -> List[_TaggedYamlValue]:
+    files = package.get("files")
+    if not isinstance(files, list):
+        return []
+    includes: List[_TaggedYamlValue] = []
+    for item in files:
+        if isinstance(item, str):
+            rel_path = item
+        elif isinstance(item, dict):
+            rel_path = str(item.get("path") or "")
+        else:
+            continue
+        source_path = _firmware_local_path(rel_path)
+        if not source_path.is_file():
+            raise RuntimeError(f"Bundled firmware package file not found: {source_path}")
+        target_path = (package_dir / rel_path).resolve()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        loaded = yaml.load(source_path.read_text(encoding="utf-8"), Loader=_FirmwareYamlLoader)
+        localized = _normalize_firmware_template_repo_refs(loaded, package_dir)
+        target_path.write_text(
+            yaml.dump(localized, Dumper=_FirmwareYamlDumper, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        includes.append(_TaggedYamlValue("!include", str(target_path)))
+    return includes
+
+
+def _localize_firmware_packages(packages: Any, package_dir: Path | None) -> Any:
+    if package_dir is None or FIRMWARE_TEMPLATE_SOURCE == "github":
+        return _normalize_firmware_template_repo_refs(packages, package_dir)
+    if not isinstance(packages, dict):
+        return _normalize_firmware_template_repo_refs(packages, package_dir)
+
+    localized_includes: List[_TaggedYamlValue] = []
+    preserved: Dict[Any, Any] = {}
+    for key, package in packages.items():
+        if isinstance(package, dict) and _is_firmware_repo_url(str(package.get("url") or "")):
+            localized_includes.extend(_localize_firmware_package_files(package, package_dir))
+        else:
+            preserved[key] = _normalize_firmware_template_repo_refs(package, package_dir)
+
+    if localized_includes and not preserved:
+        return localized_includes
+    if localized_includes:
+        return localized_includes + [{key: value} for key, value in preserved.items()]
+    return preserved
 
 
 def _normalize_firmware_repo_url(url: str) -> str:
@@ -1292,7 +1463,7 @@ def _normalize_firmware_profile_value(key: str, value: Any) -> str:
     return text
 
 
-def _normalize_firmware_template_repo_refs(value: Any) -> Any:
+def _normalize_firmware_template_repo_refs(value: Any, package_dir: Path | None = None) -> Any:
     if isinstance(value, dict):
         normalized: Dict[Any, Any] = {}
         legacy_prefix = "TaterTotterson."
@@ -1300,24 +1471,19 @@ def _normalize_firmware_template_repo_refs(value: Any) -> Any:
             new_key = key
             if isinstance(key, str) and key.startswith(legacy_prefix):
                 new_key = f"{FIRMWARE_GITHUB_OWNER}.{key[len(legacy_prefix):]}"
-            normalized[new_key] = _normalize_firmware_template_repo_refs(child)
+            if key == "packages":
+                normalized[new_key] = _localize_firmware_packages(child, package_dir)
+            elif key == "external_components" and isinstance(child, list):
+                normalized[new_key] = [
+                    _localize_firmware_external_component(item) for item in child
+                ]
+            else:
+                normalized[new_key] = _normalize_firmware_template_repo_refs(child, package_dir)
         return normalized
     if isinstance(value, list):
-        return [_normalize_firmware_template_repo_refs(item) for item in value]
+        return [_normalize_firmware_template_repo_refs(item, package_dir) for item in value]
     if isinstance(value, str):
-        text = value.replace(
-            "https://github.com/TaterTotterson/microWakeWords",
-            f"https://github.com/{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}",
-        )
-        text = text.replace(
-            "github://TaterTotterson/microWakeWords",
-            f"github://{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}",
-        )
-        text = text.replace(
-            "https://raw.githubusercontent.com/TaterTotterson/microWakeWords",
-            f"https://raw.githubusercontent.com/{FIRMWARE_GITHUB_OWNER}/{FIRMWARE_GITHUB_REPO}",
-        )
-        return text
+        return _localize_firmware_string(value)
     return value
 
 
@@ -1753,7 +1919,11 @@ def _render_firmware_config(
     if missing:
         raise RuntimeError(f"Missing required firmware values: {', '.join(missing)}.")
 
-    config = _normalize_firmware_template_repo_refs(copy.deepcopy(ctx["template_doc"]))
+    session_dir = FIRMWARE_CACHE_DIR / "configs" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    package_dir = session_dir / "packages"
+
+    config = _normalize_firmware_template_repo_refs(copy.deepcopy(ctx["template_doc"]), package_dir)
     config["substitutions"] = {key: str(normalized.get(key, "")) for key in substitutions.keys()}
     build_path = _firmware_build_cache_path(
         str(spec.get("key") or template_key),
@@ -1768,8 +1938,6 @@ def _render_firmware_config(
         esphome_block["build_path"] = str(build_path)
         config["esphome"] = esphome_block
 
-    session_dir = FIRMWARE_CACHE_DIR / "configs" / session_id
-    session_dir.mkdir(parents=True, exist_ok=True)
     config_path = session_dir / f"{build_path.parent.name}__{build_path.name}.yaml"
     config_path.write_text(yaml.dump(config, Dumper=_FirmwareYamlDumper, sort_keys=False, allow_unicode=True), encoding="utf-8")
     normalized_host, normalized_port = _firmware_profile_target(host, port)
@@ -2729,7 +2897,7 @@ def firmware_templates(request: Request, target_host: str = "", target_port: str
         row = {
             "value": key,
             "label": str(spec.get("label") or key),
-            "source_url": _firmware_raw_url(str(spec.get("path") or "")),
+            "source_url": _firmware_source_label(str(spec.get("path") or "")),
             "target_host": row_target_host,
             "target_port": row_target_port,
             "fields": [],

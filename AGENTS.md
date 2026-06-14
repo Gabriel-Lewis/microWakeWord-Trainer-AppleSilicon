@@ -79,4 +79,4 @@ All samples must be `16 kHz / mono / 16-bit PCM WAV`. `trainer_server.py` uses `
 
 ## Firmware Flashing
 
-The Firmware tab fetches YAML templates from the [microWakeWords](https://github.com/Gabriel-Lewis/microWakeWords) repo on GitHub at runtime (no local fallback). Firmware build state lives under `.cache/firmware_flasher/`. Flash sessions are tracked in `FIRMWARE_SESSIONS` dict by UUID. OTA default port: `3232`. mDNS discovery runs for `ESPHOME_DISCOVERY_SECONDS` (default 2.5s).
+The Firmware tab loads bundled YAML templates from `firmware/microWakeWords/` by default and can be forced to GitHub with `FIRMWARE_TEMPLATE_SOURCE=github`. Firmware build state lives under `.cache/firmware_flasher/`. Flash sessions are tracked in `FIRMWARE_SESSIONS` dict by UUID. OTA default port: `3232`. mDNS discovery runs for `ESPHOME_DISCOVERY_SECONDS` (default 2.5s).
