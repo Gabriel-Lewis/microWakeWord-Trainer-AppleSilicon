@@ -130,6 +130,26 @@ FIRMWARE_TEMPLATE_SPECS = (
         "auto_keys": {"ha_voice_ip"},
     },
 )
+FIRMWARE_WAKE_ENGINE_SPECS = (
+    {"key": "microwakeword", "label": "microWakeWord"},
+    {"key": "openwakeword", "label": "openWakeWord"},
+    {"key": "nanowakeword", "label": "nanoWakeWord"},
+)
+FIRMWARE_WAKE_ENGINE_KEYS = tuple(str(item["key"]) for item in FIRMWARE_WAKE_ENGINE_SPECS)
+FIRMWARE_OPTIONAL_PACKAGE_SPECS = {
+    "satellite1": (
+        {"key": "sat1/mmwave_ld2410.yaml", "label": "LD2410 mmWave", "group": "mmwave"},
+        {"key": "sat1/mmwave_ld2450.yaml", "label": "LD2450 mmWave", "group": "mmwave"},
+        {"key": "sat1/debug.yaml", "label": "Debug controls", "group": ""},
+        {"key": "sat1/developer.yaml", "label": "Developer tools", "group": ""},
+    )
+}
+FIRMWARE_PROFILE_CUSTOMIZATION_KEYS = {
+    "__enabled_wake_engines",
+    "__default_wake_engine",
+    "__enabled_optional_packages",
+}
+_FIRMWARE_REMOVE = object()
 
 app = FastAPI(title="microWakeWord Personal Samples")
 
@@ -1385,25 +1405,263 @@ def _localize_firmware_external_component(item: Any) -> Any:
     return localized
 
 
-def _localize_firmware_package_files(package: Dict[str, Any], package_dir: Path) -> List[_TaggedYamlValue]:
+def _customize_firmware_package_doc(doc: Any, customizations: Dict[str, Any] | None = None) -> Any:
+    if not isinstance(doc, dict) or not isinstance(customizations, dict):
+        return doc
+    enabled = [str(item) for item in customizations.get("enabled_wake_engines") or []]
+    default_engine = str(customizations.get("default_wake_engine") or "").strip()
+    if not enabled:
+        return doc
+
+    selects = doc.get("select")
+    if isinstance(selects, list):
+        for item in selects:
+            if not isinstance(item, dict) or str(item.get("id") or "") != "wake_engine_select":
+                continue
+            item["options"] = list(enabled)
+            item["initial_option"] = default_engine if default_engine in enabled else enabled[0]
+    return _prune_firmware_wake_engine_doc(doc, customizations)
+
+
+def _firmware_wake_engine_flags(customizations: Dict[str, Any] | None) -> Dict[str, Any]:
+    enabled = [str(item) for item in (customizations or {}).get("enabled_wake_engines") or []]
+    selected = enabled[0] if len(enabled) == 1 else str((customizations or {}).get("default_wake_engine") or "")
+    return {
+        "enabled": enabled,
+        "selected": selected,
+        "single": len(enabled) == 1,
+        "local_enabled": "microwakeword" in enabled,
+        "remote_enabled": "openwakeword" in enabled or "nanowakeword" in enabled,
+        "open_enabled": "openwakeword" in enabled,
+        "nano_enabled": "nanowakeword" in enabled,
+    }
+
+
+def _rewrite_firmware_wake_engine_string(value: str, flags: Dict[str, Any]) -> str:
+    if not flags.get("single"):
+        return value
+    selected = str(flags.get("selected") or "")
+
+    def comparison(match: re.Match[str]) -> str:
+        op = match.group(1)
+        engine = match.group(2)
+        result = selected == engine
+        if op == "!=":
+            result = not result
+        return "true" if result else "false"
+
+    rewritten = re.sub(
+        r'id\(wake_engine_select\)\.current_option\(\)\s*(==|!=)\s*"([^"]+)"',
+        comparison,
+        value,
+    )
+    rewritten = rewritten.replace('id(wake_engine_select).current_option()', f'"{selected}"')
+
+    if not flags.get("local_enabled"):
+        rewritten = "\n".join(
+            line for line in rewritten.splitlines()
+            if "id(mww)" not in line and "micro_wake_word" not in line
+        )
+    if not flags.get("remote_enabled"):
+        rewritten = "\n".join(
+            line for line in rewritten.splitlines()
+            if "id(oww)" not in line
+            and "remote_wake_word" not in line
+            and "openwakeword_server_url" not in line
+            and "nanowakeword_server_url" not in line
+            and "set_stream_path" not in line
+        )
+    elif selected == "openwakeword":
+        rewritten = rewritten.replace(
+            '(true ? id(nanowakeword_server_url).state : id(openwakeword_server_url).state).c_str()',
+            'id(openwakeword_server_url).state.c_str()',
+        )
+        rewritten = rewritten.replace(
+            '(false ? id(nanowakeword_server_url).state : id(openwakeword_server_url).state).c_str()',
+            'id(openwakeword_server_url).state.c_str()',
+        )
+    elif selected == "nanowakeword":
+        rewritten = rewritten.replace(
+            '(true ? id(nanowakeword_server_url).state : id(openwakeword_server_url).state).c_str()',
+            'id(nanowakeword_server_url).state.c_str()',
+        )
+        rewritten = rewritten.replace(
+            '(false ? id(nanowakeword_server_url).state : id(openwakeword_server_url).state).c_str()',
+            'id(nanowakeword_server_url).state.c_str()',
+        )
+    return rewritten
+
+
+def _firmware_action_uses_disabled_component(item: Dict[Any, Any], flags: Dict[str, Any]) -> bool:
+    if flags.get("local_enabled") is False:
+        if any(isinstance(key, str) and key.startswith("micro_wake_word.") for key in item.keys()):
+            return True
+    if flags.get("remote_enabled") is False:
+        if any(isinstance(key, str) and key.startswith("remote_wake_word.") for key in item.keys()):
+            return True
+    script_execute = item.get("script.execute")
+    if flags.get("single") and script_execute == "recover_openwakeword_after_fallback":
+        return True
+    return False
+
+
+def _firmware_simplified_apply_wake_engine(flags: Dict[str, Any]) -> List[Any]:
+    selected = str(flags.get("selected") or "")
+    if selected == "microwakeword":
+        return [
+            {"lambda": "id(openwakeword_wake_detected) = false;\nid(va).set_use_wake_word(false);"},
+            {"if": {"condition": {"switch.is_off": "timer_ringing"}, "then": [{"micro_wake_word.disable_model": "stop"}]}},
+            {"micro_wake_word.start": None},
+            {"micro_wake_word.enable_model": "${wake_word_name}"},
+            {"script.execute": "control_leds"},
+        ]
+    if selected in {"openwakeword", "nanowakeword"}:
+        server_id = "nanowakeword_server_url" if selected == "nanowakeword" else "openwakeword_server_url"
+        stream_path = "/api/nanowakeword/stream" if selected == "nanowakeword" else "/api/openwakeword/stream"
+        return [
+            {"remote_wake_word.stop": None},
+            {"lambda": (
+                "id(openwakeword_wake_detected) = false;\n"
+                "id(va).set_use_wake_word(false);\n"
+                f"id(oww).set_url(id({server_id}).state);\n"
+                f'id(oww).set_stream_path("{stream_path}");'
+            )},
+            {"logger.log": {"level": "INFO", "tag": "voice", "format": f"Using {selected} endpoint."}},
+            {"remote_wake_word.start": None},
+            {"script.execute": "control_leds"},
+        ]
+    return []
+
+
+def _filter_firmware_entity_list(items: List[Any], flags: Dict[str, Any], section: str) -> List[Any]:
+    filtered: List[Any] = []
+    for item in items:
+        if not isinstance(item, dict):
+            filtered.append(item)
+            continue
+        item_id = str(item.get("id") or "")
+        if section == "select" and flags.get("single") and item_id == "wake_engine_select":
+            continue
+        if section in {"text", "text_sensor"}:
+            if item_id == "openwakeword_server_url" and not flags.get("open_enabled"):
+                continue
+            if item_id == "nanowakeword_server_url" and not flags.get("nano_enabled"):
+                continue
+        if section == "number" and not flags.get("remote_enabled"):
+            if item_id in {"openwakeword_http_timeout_ms", "openwakeword_max_failures"}:
+                continue
+        filtered.append(item)
+    return filtered
+
+
+def _prune_firmware_wake_engine_doc(value: Any, customizations: Dict[str, Any] | None) -> Any:
+    flags = _firmware_wake_engine_flags(customizations)
+    if not flags.get("enabled"):
+        return value
+
+    def transform(node: Any, parent_key: str = "") -> Any:
+        if isinstance(node, str):
+            return _rewrite_firmware_wake_engine_string(node, flags)
+        if isinstance(node, list):
+            filtered: List[Any] = []
+            for child in node:
+                transformed = transform(child, parent_key)
+                if transformed is _FIRMWARE_REMOVE:
+                    continue
+                filtered.append(transformed)
+            if parent_key in {"select", "text", "text_sensor", "number"}:
+                return _filter_firmware_entity_list(filtered, flags, parent_key)
+            return filtered
+        if not isinstance(node, dict):
+            return node
+
+        if _firmware_action_uses_disabled_component(node, flags):
+            return _FIRMWARE_REMOVE
+        script_id = str(node.get("id") or "")
+        if parent_key == "script" and flags.get("single"):
+            if script_id == "recover_openwakeword_after_fallback":
+                return _FIRMWARE_REMOVE
+            if script_id == "apply_wake_engine":
+                cloned = {key: transform(child, str(key)) for key, child in node.items() if key != "then"}
+                cloned["then"] = _firmware_simplified_apply_wake_engine(flags)
+                return cloned
+
+        transformed: Dict[Any, Any] = {}
+        for key, child in node.items():
+            key_text = str(key)
+            if key_text == "micro_wake_word" and not flags.get("local_enabled"):
+                continue
+            if key_text == "remote_wake_word" and not flags.get("remote_enabled"):
+                continue
+            if key_text == "micro_wake_word" and parent_key == "voice_assistant" and not flags.get("local_enabled"):
+                continue
+            child_value = transform(child, key_text)
+            if child_value is _FIRMWARE_REMOVE:
+                continue
+            if key_text == "external_components" and isinstance(child_value, list):
+                for component in child_value:
+                    if not isinstance(component, dict) or not isinstance(component.get("components"), list):
+                        continue
+                    component["components"] = [
+                        name for name in component["components"]
+                        if not (
+                            (name == "micro_wake_word" and not flags.get("local_enabled"))
+                            or (name == "remote_wake_word" and not flags.get("remote_enabled"))
+                        )
+                    ]
+            if key_text == "remote_wake_word" and isinstance(child_value, dict) and flags.get("single"):
+                selected = str(flags.get("selected") or "")
+                if selected == "nanowakeword":
+                    child_value["url"] = "${nanowakeword_server_url}"
+                    child_value["stream_path"] = "/api/nanowakeword/stream"
+                elif selected == "openwakeword":
+                    child_value["url"] = "${openwakeword_server_url}"
+                    child_value["stream_path"] = "/api/openwakeword/stream"
+            transformed[key] = child_value
+        return transformed
+
+    return transform(value)
+
+
+def _localize_firmware_package_files(
+    package: Dict[str, Any],
+    package_dir: Path,
+    template_key: str = "",
+    customizations: Dict[str, Any] | None = None,
+) -> List[_TaggedYamlValue]:
     files = package.get("files")
     if not isinstance(files, list):
         return []
     includes: List[_TaggedYamlValue] = []
-    for item in files:
+    file_items = list(files)
+    for optional_path in (customizations or {}).get("enabled_optional_packages") or []:
+        optional_path = str(optional_path or "").strip()
+        if template_key == "satellite1" and optional_path:
+            file_items.append(optional_path)
+    seen_targets: set[str] = set()
+    for item in file_items:
         if isinstance(item, str):
             rel_path = item
         elif isinstance(item, dict):
             rel_path = str(item.get("path") or "")
         else:
             continue
+        if rel_path in seen_targets:
+            continue
+        seen_targets.add(rel_path)
         source_path = _firmware_local_path(rel_path)
         if not source_path.is_file():
             raise RuntimeError(f"Bundled firmware package file not found: {source_path}")
         target_path = (package_dir / rel_path).resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
         loaded = yaml.load(source_path.read_text(encoding="utf-8"), Loader=_FirmwareYamlLoader)
-        localized = _normalize_firmware_template_repo_refs(loaded, package_dir)
+        localized = _normalize_firmware_template_repo_refs(
+            loaded,
+            package_dir,
+            template_key=template_key,
+            customizations=customizations,
+        )
+        localized = _customize_firmware_package_doc(localized, customizations)
         target_path.write_text(
             yaml.dump(localized, Dumper=_FirmwareYamlDumper, sort_keys=False, allow_unicode=True),
             encoding="utf-8",
@@ -1412,19 +1670,46 @@ def _localize_firmware_package_files(package: Dict[str, Any], package_dir: Path)
     return includes
 
 
-def _localize_firmware_packages(packages: Any, package_dir: Path | None) -> Any:
+def _localize_firmware_packages(
+    packages: Any,
+    package_dir: Path | None,
+    template_key: str = "",
+    customizations: Dict[str, Any] | None = None,
+) -> Any:
     if package_dir is None or FIRMWARE_TEMPLATE_SOURCE == "github":
-        return _normalize_firmware_template_repo_refs(packages, package_dir)
+        return _normalize_firmware_template_repo_refs(
+            packages,
+            package_dir,
+            template_key=template_key,
+            customizations=customizations,
+        )
     if not isinstance(packages, dict):
-        return _normalize_firmware_template_repo_refs(packages, package_dir)
+        return _normalize_firmware_template_repo_refs(
+            packages,
+            package_dir,
+            template_key=template_key,
+            customizations=customizations,
+        )
 
     localized_includes: List[_TaggedYamlValue] = []
     preserved: Dict[Any, Any] = {}
     for key, package in packages.items():
         if isinstance(package, dict) and _is_firmware_repo_url(str(package.get("url") or "")):
-            localized_includes.extend(_localize_firmware_package_files(package, package_dir))
+            localized_includes.extend(
+                _localize_firmware_package_files(
+                    package,
+                    package_dir,
+                    template_key=template_key,
+                    customizations=customizations,
+                )
+            )
         else:
-            preserved[key] = _normalize_firmware_template_repo_refs(package, package_dir)
+            preserved[key] = _normalize_firmware_template_repo_refs(
+                package,
+                package_dir,
+                template_key=template_key,
+                customizations=customizations,
+            )
 
     if localized_includes and not preserved:
         return localized_includes
@@ -1463,7 +1748,12 @@ def _normalize_firmware_profile_value(key: str, value: Any) -> str:
     return text
 
 
-def _normalize_firmware_template_repo_refs(value: Any, package_dir: Path | None = None) -> Any:
+def _normalize_firmware_template_repo_refs(
+    value: Any,
+    package_dir: Path | None = None,
+    template_key: str = "",
+    customizations: Dict[str, Any] | None = None,
+) -> Any:
     if isinstance(value, dict):
         normalized: Dict[Any, Any] = {}
         legacy_prefix = "TaterTotterson."
@@ -1472,16 +1762,34 @@ def _normalize_firmware_template_repo_refs(value: Any, package_dir: Path | None 
             if isinstance(key, str) and key.startswith(legacy_prefix):
                 new_key = f"{FIRMWARE_GITHUB_OWNER}.{key[len(legacy_prefix):]}"
             if key == "packages":
-                normalized[new_key] = _localize_firmware_packages(child, package_dir)
+                normalized[new_key] = _localize_firmware_packages(
+                    child,
+                    package_dir,
+                    template_key=template_key,
+                    customizations=customizations,
+                )
             elif key == "external_components" and isinstance(child, list):
                 normalized[new_key] = [
                     _localize_firmware_external_component(item) for item in child
                 ]
             else:
-                normalized[new_key] = _normalize_firmware_template_repo_refs(child, package_dir)
+                normalized[new_key] = _normalize_firmware_template_repo_refs(
+                    child,
+                    package_dir,
+                    template_key=template_key,
+                    customizations=customizations,
+                )
         return normalized
     if isinstance(value, list):
-        return [_normalize_firmware_template_repo_refs(item, package_dir) for item in value]
+        return [
+            _normalize_firmware_template_repo_refs(
+                item,
+                package_dir,
+                template_key=template_key,
+                customizations=customizations,
+            )
+            for item in value
+        ]
     if isinstance(value, str):
         return _localize_firmware_string(value)
     return value
@@ -1636,6 +1944,7 @@ def _load_firmware_profile(template_key: str, profile_key: str = "") -> Dict[str
 def _firmware_profile_values_for_template(profile: Dict[str, Any], substitutions: Dict[str, Any]) -> Dict[str, str]:
     keep_keys = {str(key or "").strip() for key in substitutions.keys()}
     keep_keys.update({"__target_host", "__target_port", "wake_word_choice"})
+    keep_keys.update(FIRMWARE_PROFILE_CUSTOMIZATION_KEYS)
     return {
         key: _normalize_firmware_profile_value(key, profile.get(key))
         for key in keep_keys
@@ -1643,13 +1952,189 @@ def _firmware_profile_values_for_template(profile: Dict[str, Any], substitutions
     }
 
 
+def _firmware_list_value(value: Any) -> List[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, tuple) or isinstance(value, set):
+        raw_items = list(value)
+    else:
+        raw_items = str(value or "").split(",")
+    items: List[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in seen:
+            items.append(text)
+            seen.add(text)
+    return items
+
+
+def _firmware_join_value(items: List[str]) -> str:
+    return ",".join(str(item or "").strip() for item in items if str(item or "").strip())
+
+
+def _firmware_yaml_sequence(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _firmware_collect_optional_package_resources(package_path: str) -> Dict[str, set[str]]:
+    source_path = _firmware_local_path(package_path)
+    if not source_path.is_file():
+        return {"pins": set(), "uart_ids": set(), "i2c_ids": set()}
+    with contextlib.suppress(Exception):
+        doc = yaml.load(source_path.read_text(encoding="utf-8"), Loader=_FirmwareYamlLoader)
+        if isinstance(doc, dict):
+            pins: set[str] = set()
+            uart_ids: set[str] = set()
+            i2c_ids: set[str] = set()
+            for uart in _firmware_yaml_sequence(doc.get("uart")):
+                if isinstance(uart, dict):
+                    if uart.get("id"):
+                        uart_ids.add(str(uart.get("id")))
+                    for pin_key in ("tx_pin", "rx_pin"):
+                        if uart.get(pin_key):
+                            pins.add(str(uart.get(pin_key)))
+            for i2c in _firmware_yaml_sequence(doc.get("i2c")):
+                if isinstance(i2c, dict):
+                    if i2c.get("id"):
+                        i2c_ids.add(str(i2c.get("id")))
+                    for pin_key in ("sda", "scl", "sda_pin", "scl_pin"):
+                        if i2c.get(pin_key):
+                            pins.add(str(i2c.get(pin_key)))
+            return {"pins": pins, "uart_ids": uart_ids, "i2c_ids": i2c_ids}
+    return {"pins": set(), "uart_ids": set(), "i2c_ids": set()}
+
+
+def _validate_firmware_optional_package_conflicts(
+    template_key: str,
+    enabled_optional_packages: List[str],
+) -> None:
+    specs = {
+        str(item.get("key") or ""): item
+        for item in FIRMWARE_OPTIONAL_PACKAGE_SPECS.get(str(template_key or ""), ())
+    }
+    grouped: Dict[str, List[str]] = {}
+    for package_key in enabled_optional_packages:
+        group = str(specs.get(package_key, {}).get("group") or "").strip()
+        if group:
+            grouped.setdefault(group, []).append(package_key)
+    for group, selected in grouped.items():
+        if len(selected) > 1:
+            labels = [
+                str(specs.get(key, {}).get("label") or key)
+                for key in selected
+            ]
+            raise ValueError(f"Choose only one {group} package: {', '.join(labels)}.")
+
+    resource_owner: Dict[tuple[str, str], str] = {}
+    for package_key in enabled_optional_packages:
+        resources = _firmware_collect_optional_package_resources(package_key)
+        for resource_type, values in resources.items():
+            for value in values:
+                owner_key = (resource_type, value)
+                owner = resource_owner.get(owner_key)
+                if owner and owner != package_key:
+                    raise ValueError(
+                        f"Optional packages {owner} and {package_key} both use {resource_type[:-1]} {value}."
+                    )
+                resource_owner[owner_key] = package_key
+
+
+def _firmware_raw_customizations(
+    values: Dict[str, Any] | None,
+    profile: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    values = values if isinstance(values, dict) else {}
+    profile = profile if isinstance(profile, dict) else {}
+
+    def first(*keys: str) -> Any:
+        for key in keys:
+            if key in values:
+                return values.get(key)
+        for key in keys:
+            if key in profile:
+                return profile.get(key)
+        return None
+
+    return {
+        "enabled_wake_engines": first("enabled_wake_engines", "__enabled_wake_engines"),
+        "default_wake_engine": first("default_wake_engine", "__default_wake_engine"),
+        "enabled_optional_packages": first("enabled_optional_packages", "__enabled_optional_packages"),
+    }
+
+
+def _normalize_firmware_customizations(
+    template_key: str,
+    values: Dict[str, Any] | None = None,
+    profile: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    raw = _firmware_raw_customizations(values, profile)
+    explicit_wake_engines = isinstance(values, dict) and (
+        "enabled_wake_engines" in values or "__enabled_wake_engines" in values
+    )
+    enabled_wake_engines = [
+        item for item in _firmware_list_value(raw.get("enabled_wake_engines"))
+        if item in FIRMWARE_WAKE_ENGINE_KEYS
+    ]
+    if explicit_wake_engines and not enabled_wake_engines:
+        raise ValueError("Enable at least one wake engine.")
+    if not enabled_wake_engines:
+        enabled_wake_engines = list(FIRMWARE_WAKE_ENGINE_KEYS)
+
+    default_wake_engine = str(raw.get("default_wake_engine") or "").strip()
+    if default_wake_engine not in enabled_wake_engines:
+        default_wake_engine = enabled_wake_engines[0]
+
+    allowed_packages = {
+        str(item.get("key") or "")
+        for item in FIRMWARE_OPTIONAL_PACKAGE_SPECS.get(str(template_key or ""), ())
+    }
+    enabled_optional_packages = [
+        item for item in _firmware_list_value(raw.get("enabled_optional_packages"))
+        if item in allowed_packages
+    ]
+
+    _validate_firmware_optional_package_conflicts(str(template_key or ""), enabled_optional_packages)
+    return {
+        "wake_engines": list(FIRMWARE_WAKE_ENGINE_SPECS),
+        "enabled_wake_engines": enabled_wake_engines,
+        "default_wake_engine": default_wake_engine,
+        "optional_packages": list(FIRMWARE_OPTIONAL_PACKAGE_SPECS.get(str(template_key or ""), ())),
+        "enabled_optional_packages": enabled_optional_packages,
+    }
+
+
+def _store_firmware_customizations(normalized: Dict[str, str], customizations: Dict[str, Any]) -> None:
+    normalized["__enabled_wake_engines"] = _firmware_join_value(
+        [str(item) for item in customizations.get("enabled_wake_engines") or []]
+    )
+    normalized["__default_wake_engine"] = str(customizations.get("default_wake_engine") or "")
+    normalized["__enabled_optional_packages"] = _firmware_join_value(
+        [str(item) for item in customizations.get("enabled_optional_packages") or []]
+    )
+
+
+def _firmware_customization_payload(template_key: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    return _normalize_firmware_customizations(template_key, {}, profile)
+
+
 def _normalize_firmware_profile_update(template_key: str, values: Dict[str, Any], profile_key: str = "") -> Dict[str, str]:
-    values = {str(k): _sanitize_firmware_value(v) for k, v in (values or {}).items()}
+    raw_values = values if isinstance(values, dict) else {}
+    values = {
+        str(k): (v if isinstance(v, list) else _sanitize_firmware_value(v))
+        for k, v in raw_values.items()
+    }
     ctx = _load_firmware_template_context(template_key, profile_key)
     spec = ctx["spec"]
     profile = ctx.get("profile") if isinstance(ctx.get("profile"), dict) else {}
     substitutions = ctx["substitutions"]
     normalized = _firmware_profile_values_for_template(profile, substitutions)
+    customizations = _normalize_firmware_customizations(template_key, values, profile)
+    _store_firmware_customizations(normalized, customizations)
     fixed_keys = set(spec.get("fixed_keys") or set())
     identity_key = str(spec.get("identity_key") or "").strip()
     if identity_key:
@@ -1872,7 +2357,11 @@ def _render_firmware_config(
     session_id: str,
     port: Any = None,
 ) -> tuple[Path, Dict[str, str], Path]:
-    values = {str(k): _sanitize_firmware_value(v) for k, v in (values or {}).items()}
+    raw_values = values if isinstance(values, dict) else {}
+    values = {
+        str(k): (v if isinstance(v, list) else _sanitize_firmware_value(v))
+        for k, v in raw_values.items()
+    }
     host = _sanitize_firmware_value(host)
     profile_key = _firmware_profile_key(template_key, host, port)
     ctx = _load_firmware_template_context(template_key, profile_key)
@@ -1880,6 +2369,8 @@ def _render_firmware_config(
     profile = ctx.get("profile") if isinstance(ctx.get("profile"), dict) else {}
     substitutions = ctx["substitutions"]
     normalized = _firmware_profile_values_for_template(profile, substitutions)
+    customizations = _normalize_firmware_customizations(template_key, values, profile)
+    _store_firmware_customizations(normalized, customizations)
     fixed_keys = set(spec.get("fixed_keys") or set())
     identity_key = str(spec.get("identity_key") or "").strip()
     if identity_key:
@@ -1900,6 +2391,8 @@ def _render_firmware_config(
             normalized[key_text] = host
         elif key_text == "wake_word_model_url":
             normalized[key_text] = _local_trained_wake_word_url(raw_value)
+        elif key_text == "wake_engine":
+            normalized[key_text] = str(customizations.get("default_wake_engine") or "")
         else:
             normalized[key_text] = _normalize_firmware_profile_value(
                 key_text,
@@ -1923,7 +2416,12 @@ def _render_firmware_config(
     session_dir.mkdir(parents=True, exist_ok=True)
     package_dir = session_dir / "packages"
 
-    config = _normalize_firmware_template_repo_refs(copy.deepcopy(ctx["template_doc"]), package_dir)
+    config = _normalize_firmware_template_repo_refs(
+        copy.deepcopy(ctx["template_doc"]),
+        package_dir,
+        template_key=str(spec.get("key") or template_key),
+        customizations=customizations,
+    )
     config["substitutions"] = {key: str(normalized.get(key, "")) for key in substitutions.keys()}
     build_path = _firmware_build_cache_path(
         str(spec.get("key") or template_key),
@@ -2905,6 +3403,7 @@ def firmware_templates(request: Request, target_host: str = "", target_port: str
         }
         try:
             row["fields"] = _firmware_template_fields(key, base_url, profile_key)
+            row["customizations"] = _firmware_customization_payload(key, profile)
         except Exception as exc:
             warning = f"{row['label']}: {exc}"
             row["warnings"].append(warning)
@@ -2926,6 +3425,8 @@ def firmware_profile(payload: Dict[str, Any]):
         template_key = str(body.get("template_key") or "").strip()
         _firmware_template_spec(template_key)
         values = body.get("values") if isinstance(body.get("values"), dict) else {}
+        customizations = body.get("customizations") if isinstance(body.get("customizations"), dict) else {}
+        values = {**values, **customizations}
         profile_key = _firmware_profile_key(template_key, values.get("__target_host"), values.get("__target_port"))
         saved = _normalize_firmware_profile_update(template_key, values, profile_key)
         _save_firmware_profile(profile_key or template_key, saved)
@@ -2963,6 +3464,8 @@ def firmware_build_flash(payload: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
     values = body.get("values") if isinstance(body.get("values"), dict) else {}
+    customizations = body.get("customizations") if isinstance(body.get("customizations"), dict) else {}
+    values = {**values, **customizations}
     session_id = f"fw_{uuid.uuid4().hex}"
     session = {
         "id": session_id,

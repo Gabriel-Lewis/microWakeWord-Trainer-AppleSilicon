@@ -363,6 +363,23 @@
       align-items: end;
     }
 
+    .firmwareChoiceList {
+      display: grid;
+      gap: 8px;
+    }
+
+    .firmwareChoice {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .firmwareChoice input {
+      width: auto;
+    }
+
     .wakeSoundPreviewRow {
       display: flex;
       align-items: center;
@@ -2483,7 +2500,8 @@
       orderedGroups.splice(targetIndex + 1, 0, wakeSoundGroup);
     }
 
-    $("firmwareFields").innerHTML = orderedGroups.map(([section, rows]) => `
+    const customizationsHtml = renderFirmwareCustomizations(template?.customizations || {});
+    $("firmwareFields").innerHTML = customizationsHtml + orderedGroups.map(([section, rows]) => `
       <section class="firmwareSettingsSection">
         <div class="row space">
           <h3 style="margin:0;">${escapeHtml(section)}</h3>
@@ -2495,6 +2513,74 @@
       </section>
     `).join("");
     syncRenderedWakeWordSelection();
+    syncFirmwareEngineControls();
+  }
+
+  function renderFirmwareCustomizations(customizations) {
+    const wakeEngines = Array.isArray(customizations?.wake_engines) ? customizations.wake_engines : [];
+    const enabledWakeEngines = new Set(Array.isArray(customizations?.enabled_wake_engines) ? customizations.enabled_wake_engines.map(String) : []);
+    const defaultWakeEngine = String(customizations?.default_wake_engine || "");
+    const optionalPackages = Array.isArray(customizations?.optional_packages) ? customizations.optional_packages : [];
+    const enabledOptionalPackages = new Set(Array.isArray(customizations?.enabled_optional_packages) ? customizations.enabled_optional_packages.map(String) : []);
+    const wakeEngineHtml = wakeEngines.length ? `
+      <section class="firmwareSettingsSection">
+        <div class="row space">
+          <h3 style="margin:0;">Wake Engines</h3>
+        </div>
+        <div class="firmwareSettingsGrid">
+          <label class="field">
+            <strong>Enabled Engines</strong>
+            <span class="firmwareChoiceList">
+              ${wakeEngines.map((engine) => {
+                const key = String(engine.key || "");
+                return `
+                  <label class="firmwareChoice">
+                    <input type="checkbox" data-firmware-custom-engine="${escapeAttr(key)}" ${enabledWakeEngines.has(key) ? "checked" : ""} />
+                    <span>${escapeHtml(engine.label || key)}</span>
+                  </label>
+                `;
+              }).join("")}
+            </span>
+            <span class="muted">Disabled engines are removed from the device selector.</span>
+          </label>
+          <label class="field">
+            <strong>Default Engine</strong>
+            <select data-firmware-custom-default-engine>
+              ${wakeEngines.map((engine) => {
+                const key = String(engine.key || "");
+                return `<option value="${escapeAttr(key)}" ${key === defaultWakeEngine ? "selected" : ""}>${escapeHtml(engine.label || key)}</option>`;
+              }).join("")}
+            </select>
+            <span class="muted">The firmware boots with this wake engine selected.</span>
+          </label>
+        </div>
+      </section>
+    ` : "";
+    const packageHtml = optionalPackages.length ? `
+      <section class="firmwareSettingsSection">
+        <div class="row space">
+          <h3 style="margin:0;">Sat1 Add-ons</h3>
+        </div>
+        <div class="firmwareSettingsGrid">
+          <label class="field">
+            <strong>Optional Packages</strong>
+            <span class="firmwareChoiceList">
+              ${optionalPackages.map((item) => {
+                const key = String(item.key || "");
+                return `
+                  <label class="firmwareChoice">
+                    <input type="checkbox" data-firmware-custom-package="${escapeAttr(key)}" data-package-group="${escapeAttr(item.group || "")}" ${enabledOptionalPackages.has(key) ? "checked" : ""} />
+                    <span>${escapeHtml(item.label || key)}</span>
+                  </label>
+                `;
+              }).join("")}
+            </span>
+            <span class="muted">Only one mmWave package can be enabled at a time.</span>
+          </label>
+        </div>
+      </section>
+    ` : "";
+    return wakeEngineHtml + packageHtml;
   }
 
   function renderFirmwareField(field) {
@@ -2507,7 +2593,7 @@
     const options = Array.isArray(field.options) ? field.options : [];
     if (field.read_only) {
       return `
-        <label class="field">
+        <label class="field" data-firmware-setting-key="${escapeAttr(key)}">
           <strong>${escapeHtml(label)}</strong>
           <span class="readOnlyValue">${escapeHtml(value || "(from YAML)")}</span>
           ${description}
@@ -2529,7 +2615,7 @@
           }).join("")
         : "";
       return `
-        <label class="field">
+        <label class="field" data-firmware-setting-key="${escapeAttr(key)}">
           <strong>${escapeHtml(label)}</strong>
           <select data-firmware-field="${escapeAttr(key)}" data-wake-word-select ${options.length ? "" : "disabled"}>
             <option value="">${escapeHtml(placeholder || "Choose a trained wake word...")}</option>
@@ -2541,7 +2627,7 @@
     }
     if (type === "checkbox") {
       return `
-        <label class="field">
+        <label class="field" data-firmware-setting-key="${escapeAttr(key)}">
           <strong>${escapeHtml(label)}</strong>
           <span class="row">
             <input data-firmware-field="${escapeAttr(key)}" type="checkbox" ${value ? "checked" : ""} style="width:auto;" />
@@ -2552,7 +2638,7 @@
       `;
     }
     return `
-      <label class="field">
+      <label class="field" data-firmware-setting-key="${escapeAttr(key)}">
         <strong>${escapeHtml(label)}</strong>
         <input data-firmware-field="${escapeAttr(key)}" type="${type === "password" ? "password" : "text"}" value="${escapeAttr(value)}"${placeholder} autocomplete="off" />
         ${description}
@@ -2705,6 +2791,83 @@
     return values;
   }
 
+  function collectFirmwareCustomizations() {
+    const enabledWakeEngines = Array.from(document.querySelectorAll("[data-firmware-custom-engine]"))
+      .filter((field) => field instanceof HTMLInputElement && field.checked)
+      .map((field) => String(field.dataset.firmwareCustomEngine || ""))
+      .filter(Boolean);
+    const defaultSelect = document.querySelector("[data-firmware-custom-default-engine]");
+    const enabledOptionalPackages = Array.from(document.querySelectorAll("[data-firmware-custom-package]"))
+      .filter((field) => field instanceof HTMLInputElement && field.checked)
+      .map((field) => String(field.dataset.firmwareCustomPackage || ""))
+      .filter(Boolean);
+    return {
+      enabled_wake_engines: enabledWakeEngines,
+      default_wake_engine: defaultSelect instanceof HTMLSelectElement ? defaultSelect.value || "" : "",
+      enabled_optional_packages: enabledOptionalPackages,
+    };
+  }
+
+  function syncFirmwareEngineControls(changedControl = null) {
+    const engineBoxes = Array.from(document.querySelectorAll("[data-firmware-custom-engine]"))
+      .filter((field) => field instanceof HTMLInputElement);
+    if (engineBoxes.length && !engineBoxes.some((field) => field.checked)) {
+      const fallback = changedControl instanceof HTMLInputElement ? changedControl : engineBoxes[0];
+      fallback.checked = true;
+    }
+
+    const defaultSelect = document.querySelector("[data-firmware-custom-default-engine]");
+    if (defaultSelect instanceof HTMLSelectElement) {
+      const enabled = new Set(engineBoxes.filter((field) => field.checked).map((field) => String(field.dataset.firmwareCustomEngine || "")));
+      Array.from(defaultSelect.options).forEach((option) => {
+        option.disabled = !enabled.has(option.value);
+      });
+      if (!enabled.has(defaultSelect.value)) {
+        const firstEnabled = Array.from(defaultSelect.options).find((option) => enabled.has(option.value));
+        if (firstEnabled) defaultSelect.value = firstEnabled.value;
+      }
+    }
+
+    const changedPackage = changedControl instanceof HTMLInputElement ? changedControl : null;
+    if (changedPackage?.matches?.("[data-firmware-custom-package]") && changedPackage.checked && changedPackage.dataset.packageGroup) {
+      document.querySelectorAll("[data-firmware-custom-package]").forEach((field) => {
+        if (field !== changedPackage && field instanceof HTMLInputElement && field.dataset.packageGroup === changedPackage.dataset.packageGroup) {
+          field.checked = false;
+        }
+      });
+    }
+    syncFirmwareFieldVisibility();
+  }
+
+  function syncFirmwareFieldVisibility() {
+    const customizations = collectFirmwareCustomizations();
+    const enabled = new Set((customizations.enabled_wake_engines || []).map(String));
+    const localEnabled = enabled.has("microwakeword");
+    const openEnabled = enabled.has("openwakeword");
+    const nanoEnabled = enabled.has("nanowakeword");
+    const remoteEnabled = openEnabled || nanoEnabled;
+    const visibility = {
+      wake_word_choice: localEnabled,
+      wake_word_name: localEnabled,
+      wake_word_model_url: localEnabled,
+      openwakeword_server_url: openEnabled,
+      nanowakeword_server_url: nanoEnabled,
+      openwakeword_http_timeout_ms: remoteEnabled,
+      openwakeword_max_failures: remoteEnabled,
+    };
+    document.querySelectorAll("[data-firmware-setting-key]").forEach((field) => {
+      const key = String(field.dataset.firmwareSettingKey || "");
+      if (Object.prototype.hasOwnProperty.call(visibility, key)) {
+        field.hidden = !visibility[key];
+      }
+    });
+    document.querySelectorAll(".firmwareSettingsSection").forEach((section) => {
+      const settingFields = Array.from(section.querySelectorAll("[data-firmware-setting-key]"));
+      if (!settingFields.length) return;
+      section.hidden = settingFields.every((field) => field.hidden);
+    });
+  }
+
   async function saveFirmwareProfileNow({ templateKey = null, quiet = false } = {}) {
     const key = String(templateKey || $("firmwareTemplate").value || "").trim();
     if (!key) return null;
@@ -2714,7 +2877,7 @@
     const result = await api("/api/firmware/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ template_key: key, values }),
+      body: JSON.stringify({ template_key: key, values, customizations: collectFirmwareCustomizations() }),
     });
     if (!quiet && !uiState.firmwareBusy) {
       setPill($("firmwareStatus"), "Settings saved", "ok");
@@ -2804,6 +2967,7 @@
           host,
           port: port || "3232",
           values: collectFirmwareValues(),
+          customizations: collectFirmwareCustomizations(),
         }),
       });
       uiState.firmware.flashing = status;
@@ -3369,6 +3533,9 @@
     if (event.target?.matches?.('[data-firmware-field="wake_word_triggered_sound_file"]')) {
       resetWakeSoundPreview();
     }
+    if (event.target?.matches?.("[data-firmware-custom-engine], [data-firmware-custom-package], [data-firmware-custom-default-engine]")) {
+      syncFirmwareEngineControls(event.target);
+    }
     syncButtons();
     scheduleFirmwareProfileSave();
   });
@@ -3387,6 +3554,9 @@
     if (select) {
       applyWakeWordSelection(select);
       return;
+    }
+    if (event.target?.matches?.("[data-firmware-custom-engine], [data-firmware-custom-package], [data-firmware-custom-default-engine]")) {
+      syncFirmwareEngineControls(event.target);
     }
     syncButtons();
     scheduleFirmwareProfileSave();
